@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dorg-mcp-bridge-kit"
+version = "1.0.0"
+description = "Skeleton and tooling to publish Dorg Operational Competencies as MCP bridges"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.115.6",
+  "uvicorn[standard]==0.34.0",
+  "httpx==0.28.1",
+]
+
+[project.scripts]
+dorg-bridge = "cli.generate_manifest:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cli*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

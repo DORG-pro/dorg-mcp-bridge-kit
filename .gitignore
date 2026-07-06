@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+competency.manifest.json
+*.tar
+*.tar.gz

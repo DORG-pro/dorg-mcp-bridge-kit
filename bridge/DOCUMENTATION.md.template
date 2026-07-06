@@ -1,0 +1,25 @@
+# Dorg MCP bridge — user-facing competency documentation.
+
+# {{COMPETENCY_TITLE}}
+
+{{COMPETENCY_DESCRIPTION}}
+
+## Architecture
+
+Static bridge image + `competency.manifest.json`. Most tools use **tier-1** declarative
+mapping (`upstream_tool_name`, `forced_arguments`). Tools with custom logic use **tier-2**
+handlers in `competency_handlers.py`.
+
+## Tools
+
+| Tool | Tier | Effect | Access |
+|---|---|---|---|
+| _(from manifest)_ | | | |
+
+## Endpoints
+
+| Path | Method | Purpose |
+|---|---|---|
+| `/health` | GET | Liveness |
+| `/mcp` | POST | MCP Streamable-HTTP |
+| `/docs/{{COMPETENCY_ID}}` | GET | This document |
