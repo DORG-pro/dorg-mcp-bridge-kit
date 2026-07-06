@@ -32,7 +32,7 @@ Nessun codice Python. Campi nel manifest per tool entry:
 
 ### Tier 2 — handler Python
 
-Aggiungi `"handler": "nome_handler"` nel manifest. Implementa in `bridge/competency_handlers.py`:
+Aggiungi `"handler": "nome_handler"` nel manifest. Implementa in `bridges/<nome>/competency_handlers.py`:
 
 ```python
 from handlers.registry import register
@@ -50,6 +50,136 @@ async def assign_ticket_to_me(ctx, arguments):
 **Quando usare tier 2:** multi-call, validazione complessa, trasformazione risposta, tool sintetico senza upstream, logica condizionale.
 
 **Regola:** prova tier 1 prima; passa a tier 2 solo se il manifest non basta.
+
+## Domande da fare all'utente (nuovo bridge)
+
+Quando l'utente chiede di **creare un nuovo bridge**, non iniziare a scrivere file finché non hai raccolto le informazioni sotto. Fai le domande in ordine; raggruppale in un unico messaggio se possibile. Se l'utente non sa rispondere, proponi un default e chiedi conferma.
+
+### 1. Identità competenza (obbligatorio)
+
+| Domanda | Perché | Default se assente |
+|---|---|---|
+| **`competency_id`** — quale id University? (es. `acme.crm.bridge`, solo alfanumerico e `-`) | Immutabile, usato in manifest e `/docs/<id>` | Derivare da org + servizio: `<org>.<servizio>.bridge` |
+| **Titolo** — nome leggibile in University? | `competency_title` | Titolo del servizio upstream |
+| **Descrizione** — cosa fa la competenza in 1–2 frasi? | `competency_description` | "Bridge verso \<servizio\> via MCP" |
+| **Versione iniziale**? | `competency_version` | `1.0.0` |
+| **Nome cartella bridge** in `bridges/<nome>/`? (lowercase, trattini) | Workspace repo | Slug dal `competency_id` senza punti |
+
+### 2. MCP upstream (obbligatorio)
+
+| Domanda | Perché |
+|---|---|
+| **URL endpoint** MCP Streamable-HTTP? (es. `https://api.example.com/mcp`) | `upstream.endpoint` + `UPSTREAM_MCP_ENDPOINT` in manifest env |
+| **Autenticazione upstream** — API key (header?), Bearer, o nessuna? | `competency_env`, `bridge.upstream_auth_header`, `UPSTREAM_AUTH_MODE` |
+| **Hai accesso ora** per eseguire `tools/list`? (endpoint raggiungibile + credenziali di test) | Necessario per `generate-manifest`; senza, chiedi export manuale dei tool o endpoint di staging |
+
+Non chiedere mai di committare segreti: le credenziali restano in env locale / `--api-key` solo per la generazione.
+
+### 3. Strategia tool (obbligatorio — scegli una modalità)
+
+Chiedi esplicitamente:
+
+> Vuoi esporre **tutti** i tool upstream (passthrough 1:1), **solo un sottoinsieme**, o **virtual tool** con rename/filtri?
+
+| Risposta utente | Config |
+|---|---|
+| Tutti i tool, stessi nomi | `init-bridge --template passthrough`, `passthrough_unmapped: true`, `mappings: []` |
+| Tutti tranne alcuni pericolosi | `passthrough_unmapped: true` + `exclude_upstream: [...]` |
+| Solo tool selezionati / rename / filtri fissi | `passthrough_unmapped: false` + `mappings: [...]` |
+| Mix (alcuni virtual + resto passthrough) | `passthrough_unmapped: true` + `mappings` per i virtual |
+
+Se non è passthrough puro, per **ogni tool esposto** chiedi (o deduci da `tools/list`):
+
+| Domanda | Campo manifest |
+|---|---|
+| Nome esposto al dorg (`tool_name`)? | Può differire da upstream |
+| Tool upstream reale (`upstream_tool_name`)? | Se diverso da `tool_name` |
+| Descrizione business per il dorg? | `tool_description` |
+| Argomenti **fissi** da nascondere all'LLM? (es. `status: open`) | `forced_arguments` |
+| Valori da **env operatore**? (es. `workspaceId` da `WORKSPACE_ID`) | `forced_arguments_from_env` + dichiarazione in `competency.env` |
+| Il upstream usa **nomi parametro diversi** dal contesto Dorg? | `upstream_injections` e/o `argument_aliases` |
+| Chi può usare il tool? | `allowed_groups` (default `all_users`) |
+| Serve **consenso** su contesto utente? (`user_email`, `user_groups`, …) | `injected_params` — solo chiavi necessarie |
+
+### 4. Injected params e mapping chiavi (se applicabile)
+
+Se un tool deve ricevere dati dal collega (email, gruppi, …) **e** passarli all'upstream con **nome diverso**:
+
+1. Chiedi quali chiavi orchestrator servono → `injected_params` (vocabolario chiuso: `python -m cli list-injected-params`).
+2. Chiedi come si chiamano sul MCP remoto → `upstream_injections`:
+
+```json
+{ "injected_key": "user_email", "upstream_key": "assignee" }
+```
+
+Esempio da chiarire con l'utente: *"Il dorg inietta `user_email`; l'API remota si aspetta `assignee`?"*
+
+### 5. Tier-2 — codice custom (solo se necessario)
+
+Chiedi:
+
+> Serve logica che il manifest non può esprimere? (chiamate multiple, validazione complessa, risposta trasformata, tool che non esiste upstream)
+
+Per ogni tool tier-2 chiedi:
+
+| Domanda | Output |
+|---|---|
+| Nome handler (`handler` nel manifest)? | es. `assign_ticket_to_me` |
+| Quale tool upstream chiama (se uno)? | `upstream_tool_name` + implementazione in `competency_handlers.py` |
+| Schema input per il dorg? | `input_schema` nel manifest o `@register(..., input_schema=...)` |
+
+Se tutto è rename + forced args + `upstream_injections`, **resta tier-1**.
+
+### 6. Env da dichiarare in University (obbligatorio elenco, non valori)
+
+Per ogni variabile che l'operatore configurerà:
+
+| Domanda | Campi `competency.env` |
+|---|---|
+| Nome variabile (`key`)? | es. `UPSTREAM_MCP_ENDPOINT` |
+| Etichetta e descrizione per Console? | `label`, `description` |
+| Obbligatoria? | `required` |
+| Segreto (Key Vault)? | `secret` |
+
+Minimo quasi sempre: `UPSTREAM_MCP_ENDPOINT`. Aggiungi `UPSTREAM_API_KEY` / bearer solo se l'upstream lo richiede. Aggiungi env custom solo se usate in `forced_arguments_from_env`.
+
+### 7. Pubblicazione e runtime (consigliato)
+
+| Domanda | Uso |
+|---|---|
+| **Registry Docker** e tag immagine? | `competency_docker_image`, `docker build -t ...` |
+| **`intended_usage`** — 2–5 frasi "Use when…" / "Do not use…"? | Manifest University |
+| **vCPU / RAM** container? | Default `0.5` / `1.0` se non specificato |
+| **Documentazione utente** — cosa deve sapere il collega che usa la skill? | `bridges/<nome>/DOCUMENTATION.md` |
+
+### 8. Checklist prima di generare
+
+Conferma con l'utente:
+
+- [ ] `competency_id` e nome cartella `bridges/<nome>/` definiti
+- [ ] Endpoint upstream noto (o piano B senza `generate-manifest` live)
+- [ ] Strategia tool (passthrough / exclude / virtual) chiara
+- [ ] Per ogni tool non banale: mapping, groups, injected, forced args documentati
+- [ ] Nessun segreto nel manifest o in `project.config.json`
+- [ ] Tier-2 giustificato solo dove serve
+
+### Ordine operativo dopo le risposte
+
+```
+1. python -m cli init-bridge <nome> [--template passthrough|default]
+2. Compilare bridges/<nome>/project.config.json dalle risposte
+3. python -m cli generate-manifest --bridge <nome>   # se upstream raggiungibile
+4. bridges/<nome>/competency_handlers.py             # solo tier-2
+5. bridges/<nome>/DOCUMENTATION.md
+6. python -m cli validate-manifest --bridge <nome>
+7. python -m cli package --bridge <nome>
+```
+
+### Cosa non chiedere
+
+- Valori di API key, bearer o password (solo *se* servono e *come* dichiararli in env).
+- Dettagli implementativi del runtime condiviso (`bridge/server.py`) — non si forkano per competenza.
+- Conferma su ogni singolo tool se l'utente ha chiesto passthrough completo e non ci sono tool da escludere.
 
 ## Workflow agente
 
@@ -133,7 +263,7 @@ Stesso manifest, stesso container:
 ```
 
 Il router in `server.py`:
-- tool con `handler` → `competency_handlers.py`
+- tool con `handler` → `bridges/<nome>/competency_handlers.py` (via package)
 - altrimenti → `manifest.py` tier-1
 - tool non in manifest → non esposto (se manifest.tools non vuoto)
 
