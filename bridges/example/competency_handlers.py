@@ -1,4 +1,4 @@
-"""Tier-2 handler example — copy into bridge/competency_handlers.py."""
+"""Tier-2 handler example for bridges/example — uses upstream_injections from manifest."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from handlers.registry import register
     },
 )
 async def assign_ticket_to_me(ctx, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Uses upstream_injections from manifest: user_email → assignee."""
     ticket_id = arguments.get("ticket_id")
     if not ticket_id:
         return {

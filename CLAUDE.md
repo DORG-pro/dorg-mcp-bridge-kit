@@ -55,17 +55,18 @@ async def assign_ticket_to_me(ctx, arguments):
 
 ```
 1. Raccogli: endpoint MCP, credenziali, competency metadata, tool mappings
-2. Crea project.config.json (examples/project.config.example.json)
-3. python -m cli generate-manifest --project project.config.json
-4. Se handler richiesti: copia/adatta examples/competency_handlers.example.py
-5. Scrivi DOCUMENTATION.md
-6. .\scripts\package-bridge.ps1 -Project project.config.json
-7. docker build -t <registry>/dorg-mcp-bridge:<tag> bridge/
+2. python -m cli init-bridge <nome>
+3. Edita bridges/<nome>/project.config.json
+4. python -m cli generate-manifest --bridge <nome>
+5. Se handler richiesti: edita bridges/<nome>/competency_handlers.py
+6. Edita bridges/<nome>/DOCUMENTATION.md
+7. python -m cli package --bridge <nome>
+8. docker build -t <registry>/<image>:<tag> bridges/<nome>/.build
 ```
 
 ## project.config.json
 
-Mappings in `tool_mappings` (solo per generazione CLI → finiscono nel manifest):
+Vive in `bridges/<nome>/project.config.json`. Mappings in `tool_mappings`:
 
 ```json
 {
@@ -151,7 +152,8 @@ Il router in `server.py`:
 ## Validazione
 
 ```bash
-python -m cli validate-manifest --manifest competency.manifest.json
+python -m cli validate-manifest --bridge <nome>
+python -m cli list-bridges
 pytest tests/ -v
 ```
 
@@ -167,9 +169,9 @@ Non committare segreti. Mai valori env nel manifest.
 
 | File | Tier |
 |---|---|
-| `project.config.json` | Setup generazione |
-| `competency.manifest.json` | 1 (+ dichiarazione handler) |
-| `competency_handlers.py` | 2 solo se necessario |
-| `DOCUMENTATION.md` | Sempre |
+| `bridges/<nome>/project.config.json` | Setup generazione |
+| `bridges/<nome>/competency.manifest.json` | 1 (+ dichiarazione handler) |
+| `bridges/<nome>/competency_handlers.py` | 2 solo se necessario |
+| `bridges/<nome>/DOCUMENTATION.md` | Sempre |
 
-Non modificare `server.py` / `manifest.py` per singole competenze.
+Non modificare `bridge/server.py` / `bridge/manifest.py` — upgrade centralizzato via `package`.

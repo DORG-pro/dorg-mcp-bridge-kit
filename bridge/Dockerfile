@@ -1,5 +1,4 @@
-# Dorg MCP bridge — generic static image.
-# Per-competency files: competency.manifest.json, DOCUMENTATION.md, competency_handlers.py (optional).
+# Dorg MCP bridge — generic static image (build context assembled by `cli package`).
 
 FROM python:3.12-slim AS base
 

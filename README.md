@@ -25,37 +25,57 @@ Un'**unica immagine Docker generica** (`dorg-mcp-bridge`) legge a runtime:
 
 Tool con `"handler": "nome"` nel manifest → funzione in `competency_handlers.py`.
 
-Vedi `examples/competency_handlers.example.py` (`assign_ticket_to_me`).
+Vedi `bridges/example/competency_handlers.py` (`assign_ticket_to_me`).
 
 ## Quick start
 
 ```powershell
 cd e:\Dev\DORG\dorg-mcp-bridge-kit
 
-# 1. Configura progetto
-cp examples\project.config.example.json project.config.json
+# 1. Crea workspace bridge
+python -m cli init-bridge my-service
 # oppure passthrough 1:1:
-# cp examples\project.config.passthrough.json project.config.json
+# python -m cli init-bridge my-proxy --template passthrough
 
-# 2. Genera manifest (richiede MCP upstream raggiungibile)
-.venv\Scripts\python -m cli generate-manifest --project project.config.json
+# 2. Configura bridges/my-service/project.config.json (endpoint, competency, mappings)
 
-# 3. (Opzionale) Tier-2 handlers
-cp examples\competency_handlers.example.py bridge\competency_handlers.py
+# 3. Genera manifest (richiede MCP upstream raggiungibile)
+python -m cli generate-manifest --bridge my-service
 
-# 4. Documentazione
-cp bridge\DOCUMENTATION.md.template DOCUMENTATION.md
+# 4. (Opzionale) Tier-2: edita bridges/my-service/competency_handlers.py
 
 # 5. Package + Docker
-.\scripts\package-bridge.ps1 -Project project.config.json
-docker build -t yourregistry.azurecr.io/dorg-mcp-bridge:1.0.0 bridge/
+python -m cli package --bridge my-service
+docker build -t yourregistry.azurecr.io/my-service:1.0.0 bridges/my-service/.build
 ```
+
+Oppure: `.\scripts\init-bridge.ps1 -Name my-service` → `.\scripts\build-bridge.ps1 -Bridge my-service -Tag yourregistry.azurecr.io/my-service:1.0.0`
+
+## Struttura monorepo
+
+```
+dorg-mcp-bridge-kit/
+├── bridge/                 # Runtime condiviso (upgrade centralizzato)
+├── bridges/
+│   ├── _template/          # Scaffold init-bridge
+│   ├── example/            # Esempio di riferimento
+│   └── <nome>/             # Un bridge = una competenza
+│       ├── project.config.json
+│       ├── competency.manifest.json
+│       ├── DOCUMENTATION.md
+│       ├── competency_handlers.py   # opzionale
+│       └── .build/                  # generato da package (gitignored)
+├── cli/
+└── scripts/
+```
+
+Ogni competenza vive in `bridges/<nome>/`. Il comando `package` copia il runtime aggiornato da `bridge/` in `bridges/<nome>/.build/` — nessun fork di `server.py` per bridge.
 
 ## `project.config.json`
 
-File di **configurazione di progetto** usato dal CLI `generate-manifest`. Non viene deployato nel container: il CLI lo legge, interroga l'MCP upstream e produce `competency.manifest.json`.
+File in **`bridges/<nome>/project.config.json`**, usato dal CLI `generate-manifest`. Non va nel container; produce `competency.manifest.json` nella stessa cartella.
 
-Parti da `examples/project.config.example.json` (virtual tools + handler) o `examples/project.config.passthrough.json` (proxy 1:1).
+Template: `bridges/_template/project.config.json` (virtual tools) o `project.config.passthrough.json` (1:1).
 
 ### Sezioni principali
 
@@ -187,23 +207,26 @@ Metadata opzionali copiati nel manifest sotto `bridge` (es. header auth upstream
 ### Flusso config → manifest
 
 ```
-project.config.json
+project.config.json  (in bridges/<name>/)
        │
        ├─ competency.*     → competency_id, title, env, vcpu, …
        ├─ tool_mappings    → tools[] (con upstream_tool_name, forced_*, handler)
        └─ tool_defaults    → allowed_groups, injected_params, retention
        │
-       ▼  generate-manifest (+ tools/list upstream)
-competency.manifest.json  → deployato nel container + pubblicato su University
+       ▼  generate-manifest --bridge <name>
+bridges/<name>/competency.manifest.json  → package → .build/ → Docker
 ```
 
-Template completi: `examples/project.config.example.json`, `examples/project.config.passthrough.json`.
+Template: `bridges/_template/`. Esempio completo: `bridges/example/`.
 
 ## CLI
 
 ```bash
-python -m cli generate-manifest --project project.config.json
-python -m cli validate-manifest --manifest competency.manifest.json
+python -m cli init-bridge <name> [--template passthrough]
+python -m cli generate-manifest --bridge <name>
+python -m cli validate-manifest --bridge <name>
+python -m cli package --bridge <name>
+python -m cli list-bridges
 python -m cli list-injected-params
 ```
 
@@ -234,15 +257,11 @@ python -m cli list-injected-params
 
 ```
 dorg-mcp-bridge-kit/
-├── bridge/                    # Runtime Docker (immagine generica)
-│   ├── server.py              # Router tier-1 / tier-2
-│   ├── manifest.py            # Lettura manifest + transform tier-1
-│   ├── handlers/              # Registry handler
-│   └── competency_handlers.py # Handler custom per competenza
-├── cli/                       # generate-manifest
-├── examples/
-├── scripts/package-bridge.ps1
-├── CLAUDE.md                  # Guida agente AI
+├── bridge/                    # Runtime Docker (immagine generica, upgrade qui)
+├── bridges/<name>/            # Una competenza per cartella
+├── cli/                       # init-bridge, generate-manifest, package
+├── scripts/                   # init-bridge.ps1, package-bridge.ps1, build-bridge.ps1
+├── CLAUDE.md
 └── tests/
 ```
 

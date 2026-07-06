@@ -1,0 +1,99 @@
+{
+  "competency": {
+    "id": "acme.example.bridge",
+    "title": "Example MCP Bridge",
+    "description": "Wraps a remote MCP server as a Dorg Operational Competency via a static HTTP bridge.",
+    "version": "1.0.0",
+    "vcpu": 0.5,
+    "ram": 1.0,
+    "health_path": "/health",
+    "mcp_path": "/mcp",
+    "docker_image": "yourregistry.azurecr.io/dorg-mcp-bridge:1.0.0",
+    "supported_dorg_versions": ["3.*"],
+    "intended_usage": [
+      "Use when colleagues need to interact with the wrapped remote service through natural language.",
+      "Do not use for operations outside the exposed tools."
+    ],
+    "env": [
+      {
+        "key": "UPSTREAM_MCP_ENDPOINT",
+        "label": "Remote MCP endpoint",
+        "description": "Full URL of the upstream MCP Streamable-HTTP endpoint.",
+        "required": true,
+        "secret": false
+      },
+      {
+        "key": "UPSTREAM_API_KEY",
+        "label": "Remote MCP API key",
+        "description": "Sent as X-Api-Key to the upstream server (if required).",
+        "required": false,
+        "secret": true
+      },
+      {
+        "key": "DEFAULT_CUSTOMER_ID",
+        "label": "Default customer id",
+        "description": "Injected into virtual tools via forced_arguments_from_env.",
+        "required": false,
+        "secret": false
+      }
+    ]
+  },
+  "upstream": {
+    "endpoint": "https://example.com/mcp",
+    "auth_header_name": "X-Api-Key"
+  },
+  "bridge": {
+    "upstream_auth_header": "X-Api-Key"
+  },
+  "manifest_output": "competency.manifest.json",
+  "tool_defaults": {
+    "allowed_groups": ["all_users"],
+    "injected_params": [{ "key": "user_email" }],
+    "retention": {
+      "message_retention_hours": 24,
+      "log_retention_hours": 168
+    }
+  },
+  "tool_mappings": {
+    "passthrough_unmapped": false,
+    "exclude_upstream": ["admin_delete_all"],
+    "mappings": [
+      {
+        "tool_name": "list_open_tickets",
+        "upstream_tool_name": "get_tickets",
+        "tool_description": "List support tickets filtered to open status only.",
+        "tool_name_user": "List open tickets",
+        "forced_arguments": { "status": "open" }
+      },
+      {
+        "tool_name": "create_ticket_as_teams",
+        "upstream_tool_name": "create_ticket",
+        "tool_description": "Create a support ticket; source channel is always Teams.",
+        "forced_arguments": { "sourceChannel": "teams" },
+        "forced_arguments_from_env": { "customerId": "DEFAULT_CUSTOMER_ID" },
+        "upstream_injections": [
+          { "injected_key": "user_display_name", "upstream_key": "reporterName" }
+        ],
+        "injected_params": [
+          { "key": "user_email" },
+          { "key": "user_display_name" },
+          { "key": "channel" }
+        ],
+        "retention": {
+          "message_retention_hours": 24,
+          "log_retention_hours": 720
+        }
+      },
+      {
+        "tool_name": "assign_ticket_to_me",
+        "handler": "assign_ticket_to_me",
+        "upstream_tool_name": "update_ticket",
+        "tool_description": "Assign a ticket to the colleague currently talking to the dorg.",
+        "upstream_injections": [
+          { "injected_key": "user_email", "upstream_key": "assignee" }
+        ],
+        "injected_params": [{ "key": "user_email" }]
+      }
+    ]
+  }
+}

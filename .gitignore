@@ -6,6 +6,7 @@ venv/
 dist/
 build/
 *.egg-info/
-competency.manifest.json
+bridges/*/.build/
+bridges/*/.env
 *.tar
 *.tar.gz

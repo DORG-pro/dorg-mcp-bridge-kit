@@ -10,6 +10,14 @@ from typing import Any
 
 import httpx
 
+from cli.bridge_paths import (
+    BridgeWorkspace,
+    assemble_build_context,
+    init_bridge,
+    list_bridges,
+    resolve_bridge_workspace,
+)
+
 _BRIDGE_DIR = Path(__file__).resolve().parents[1] / "bridge"
 if str(_BRIDGE_DIR) not in sys.path:
     sys.path.insert(0, str(_BRIDGE_DIR))
@@ -68,13 +76,30 @@ def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _resolve_workspace(args: argparse.Namespace) -> BridgeWorkspace:
+    if getattr(args, "bridge", None):
+        return resolve_bridge_workspace(args.bridge)
+    if getattr(args, "project", None):
+        project_path = Path(args.project)
+        if project_path.is_dir():
+            return resolve_bridge_workspace(project_path)
+        return resolve_bridge_workspace(project_path.parent)
+    raise ValueError("Specify --bridge <name> or --project <path>")
+
+
+def _manifest_output_path(project: dict[str, Any], project_path: Path, override: str | None) -> Path:
+    if override:
+        p = Path(override)
+        return p if p.is_absolute() else project_path.parent / p
+    name = project.get("manifest_output", "competency.manifest.json")
+    p = Path(name)
+    return p if p.is_absolute() else project_path.parent / p
+
+
 def _upstream_injections_for_manifest(mapping: dict[str, Any]) -> list[dict[str, str]] | None:
     if mapping.get("upstream_injections"):
         return [
-            {
-                "injected_key": item["injected_key"],
-                "upstream_key": item["upstream_key"],
-            }
+            {"injected_key": item["injected_key"], "upstream_key": item["upstream_key"]}
             for item in mapping["upstream_injections"]
         ]
     legacy = mapping.get("inject_from_orchestrator")
@@ -132,14 +157,10 @@ def _mapping_dict_to_manifest_tool(
         entry["tool_description_user"] = mapping.get("tool_description_user") or mapping.get("description_user")
     if mapping.get("concurrency"):
         entry["concurrency"] = mapping["concurrency"]
-
     return entry
 
 
-def _passthrough_tool(
-    upstream_tool: dict[str, Any],
-    defaults: dict[str, Any],
-) -> dict[str, Any]:
+def _passthrough_tool(upstream_tool: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
     name = upstream_tool["name"]
     return {
         "tool_name": name,
@@ -186,10 +207,7 @@ def build_manifest_tools(
     return entries
 
 
-def build_manifest(
-    project: dict[str, Any],
-    upstream_tools: list[dict[str, Any]],
-) -> dict[str, Any]:
+def build_manifest(project: dict[str, Any], upstream_tools: list[dict[str, Any]]) -> dict[str, Any]:
     competency = project["competency"]
     tools = build_manifest_tools(upstream_tools, project)
 
@@ -234,14 +252,43 @@ def _load_project_config(path: Path) -> dict[str, Any]:
     return data
 
 
-def cmd_generate(args: argparse.Namespace) -> int:
-    project_path = Path(args.project)
-    project = _load_project_config(project_path)
+def cmd_init_bridge(args: argparse.Namespace) -> int:
+    try:
+        ws = init_bridge(args.name, template=args.template)
+    except (FileExistsError, FileNotFoundError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"Created bridge workspace: {ws.root}", file=sys.stderr)
+    print("Next:", file=sys.stderr)
+    print(f"  1. Edit {ws.project_config}", file=sys.stderr)
+    print(f"  2. python -m cli generate-manifest --bridge {ws.name}", file=sys.stderr)
+    return 0
 
+
+def cmd_generate(args: argparse.Namespace) -> int:
+    try:
+        if args.bridge:
+            ws = resolve_bridge_workspace(args.bridge)
+            project_path = ws.project_config
+        elif args.project:
+            project_path = Path(args.project)
+            ws = resolve_bridge_workspace(project_path.parent)
+        else:
+            print("error: specify --bridge <name> or --project <path>", file=sys.stderr)
+            return 1
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if not project_path.exists():
+        print(f"error: project config not found: {project_path}", file=sys.stderr)
+        return 1
+
+    project = _load_project_config(project_path)
     upstream = project.get("upstream") or {}
     endpoint = args.endpoint or upstream.get("endpoint")
     if not endpoint:
-        print("error: upstream endpoint required (--endpoint or project.upstream.endpoint)", file=sys.stderr)
+        print("error: upstream endpoint required (--endpoint or upstream.endpoint)", file=sys.stderr)
         return 1
 
     api_key = args.api_key or upstream.get("api_key") or ""
@@ -252,14 +299,30 @@ def cmd_generate(args: argparse.Namespace) -> int:
     print(f"Found {len(upstream_tools)} upstream tool(s).", file=sys.stderr)
 
     manifest = build_manifest(project, upstream_tools)
-    output = Path(args.output or project.get("manifest_output", "competency.manifest.json"))
+    output = _manifest_output_path(project, project_path, args.output)
     output.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"Wrote {output} ({len(manifest['tools'])} tool entries).", file=sys.stderr)
     return 0
 
 
 def cmd_validate_manifest(args: argparse.Namespace) -> int:
-    path = Path(args.manifest)
+    try:
+        if args.bridge:
+            ws = resolve_bridge_workspace(args.bridge)
+            path = ws.manifest
+        elif args.manifest:
+            path = Path(args.manifest)
+        else:
+            print("error: specify --bridge <name> or --manifest <path>", file=sys.stderr)
+            return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if not path.exists():
+        print(f"error: manifest not found: {path}", file=sys.stderr)
+        return 1
+
     cfg = ManifestConfig.from_dict(_load_json(path))
     print(f"OK: competency_id={cfg.competency_id}, tools={len(cfg.tools)}")
     for t in cfg.tools:
@@ -268,6 +331,28 @@ def cmd_validate_manifest(args: argparse.Namespace) -> int:
         extra = f" handler={t.handler}" if t.handler else ""
         remap = f" -> {upstream}" if upstream != t.tool_name else ""
         print(f"  [{tier}] {t.tool_name}{remap}{extra}")
+    return 0
+
+
+def cmd_package(args: argparse.Namespace) -> int:
+    try:
+        ws = resolve_bridge_workspace(args.bridge)
+        build_dir = assemble_build_context(ws)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"Packaged {ws.name} -> {build_dir}", file=sys.stderr)
+    print(f"docker build -t <registry>/<image>:<tag> {build_dir}", file=sys.stderr)
+    return 0
+
+
+def cmd_list_bridges(_: argparse.Namespace) -> int:
+    names = list_bridges()
+    if not names:
+        print("No bridge workspaces found under bridges/ (excluding _template).")
+        return 0
+    for name in names:
+        print(name)
     return 0
 
 
@@ -280,21 +365,40 @@ def cmd_list_injected(_: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dorg-bridge",
-        description="Generate and validate Dorg competency manifests for MCP bridges.",
+        description="Manage Dorg MCP bridge workspaces under bridges/<name>/.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    init = sub.add_parser("init-bridge", help="Create bridges/<name>/ from template")
+    init.add_argument("name", help="Bridge folder name (e.g. dorghub)")
+    init.add_argument(
+        "--template",
+        choices=("default", "passthrough"),
+        default="default",
+        help="default: virtual tools template; passthrough: 1:1 proxy template",
+    )
+    init.set_defaults(func=cmd_init_bridge)
+
     gen = sub.add_parser("generate-manifest", help="Fetch upstream tools and write competency.manifest.json")
-    gen.add_argument("--project", "-p", required=True, help="Path to project.config.json")
+    gen.add_argument("--bridge", "-b", help="Bridge name under bridges/ (recommended)")
+    gen.add_argument("--project", "-p", help="Path to project.config.json (alternative)")
     gen.add_argument("--endpoint", "-e", help="Override upstream MCP endpoint URL")
     gen.add_argument("--api-key", help="Upstream API key for tools/list (optional)")
-    gen.add_argument("--output", "-o", help="Output manifest path")
+    gen.add_argument("--output", "-o", help="Override manifest output path")
     gen.add_argument("--timeout", type=float, default=60.0)
     gen.set_defaults(func=cmd_generate)
 
-    val = sub.add_parser("validate-manifest", help="Validate competency.manifest.json for bridge routing")
-    val.add_argument("--manifest", "-m", required=True)
+    val = sub.add_parser("validate-manifest", help="Validate competency.manifest.json")
+    val.add_argument("--bridge", "-b", help="Bridge name under bridges/")
+    val.add_argument("--manifest", "-m", help="Path to manifest file")
     val.set_defaults(func=cmd_validate_manifest)
+
+    pkg = sub.add_parser("package", help="Assemble bridges/<name>/.build/ for Docker")
+    pkg.add_argument("--bridge", "-b", required=True, help="Bridge name under bridges/")
+    pkg.set_defaults(func=cmd_package)
+
+    lst = sub.add_parser("list-bridges", help="List bridge workspaces in bridges/")
+    lst.set_defaults(func=cmd_list_bridges)
 
     inj = sub.add_parser("list-injected-params", help="Print orchestrator injected param keys")
     inj.set_defaults(func=cmd_list_injected)
