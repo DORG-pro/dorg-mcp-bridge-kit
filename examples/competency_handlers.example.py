@@ -19,17 +19,19 @@ from handlers.registry import register
     },
 )
 async def assign_ticket_to_me(ctx, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Maps user_email orchestrator injection to upstream assignee field."""
-    email = arguments.get("user_email")
+    """Uses upstream_injections from manifest: user_email → assignee."""
     ticket_id = arguments.get("ticket_id")
-    if not email:
-        return {
-            "content": [{"type": "text", "text": json.dumps({"error": "No user context."})}],
-            "isError": True,
-        }
     if not ticket_id:
         return {
             "content": [{"type": "text", "text": json.dumps({"error": "ticket_id is required."})}],
+            "isError": True,
+        }
+
+    upstream_args = ctx.map_injected_to_upstream(arguments)
+    email = upstream_args.get("assignee")
+    if not email:
+        return {
+            "content": [{"type": "text", "text": json.dumps({"error": "No user context."})}],
             "isError": True,
         }
 

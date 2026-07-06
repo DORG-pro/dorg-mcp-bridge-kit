@@ -68,6 +68,24 @@ def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _upstream_injections_for_manifest(mapping: dict[str, Any]) -> list[dict[str, str]] | None:
+    if mapping.get("upstream_injections"):
+        return [
+            {
+                "injected_key": item["injected_key"],
+                "upstream_key": item["upstream_key"],
+            }
+            for item in mapping["upstream_injections"]
+        ]
+    legacy = mapping.get("inject_from_orchestrator")
+    if legacy:
+        return [
+            {"injected_key": injected, "upstream_key": upstream}
+            for upstream, injected in legacy.items()
+        ]
+    return None
+
+
 def _mapping_dict_to_manifest_tool(
     mapping: dict[str, Any],
     upstream_tool: dict[str, Any] | None,
@@ -101,8 +119,9 @@ def _mapping_dict_to_manifest_tool(
         entry["forced_arguments"] = mapping["forced_arguments"]
     if mapping.get("forced_arguments_from_env"):
         entry["forced_arguments_from_env"] = mapping["forced_arguments_from_env"]
-    if mapping.get("inject_from_orchestrator"):
-        entry["inject_from_orchestrator"] = mapping["inject_from_orchestrator"]
+    injections = _upstream_injections_for_manifest(mapping)
+    if injections:
+        entry["upstream_injections"] = injections
     if mapping.get("argument_aliases"):
         entry["argument_aliases"] = mapping["argument_aliases"]
     if mapping.get("input_schema"):

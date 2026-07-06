@@ -30,6 +30,41 @@ ORCHESTRATOR_INJECTED_KEYS = frozenset({
 })
 
 
+@dataclass(frozen=True)
+class UpstreamInjection:
+    """Maps an orchestrator-injected argument key to an upstream request field name."""
+
+    injected_key: str
+    upstream_key: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> UpstreamInjection:
+        injected = data.get("injected_key") or data.get("from_injected") or data.get("from")
+        upstream = data.get("upstream_key") or data.get("to_upstream") or data.get("to")
+        if not injected or not upstream:
+            raise ValueError(
+                "Each upstream_injection requires injected_key and upstream_key "
+                "(aliases: from_injected/to_upstream or from/to)."
+            )
+        return cls(injected_key=injected, upstream_key=upstream)
+
+
+def parse_upstream_injections(data: dict[str, Any]) -> list[UpstreamInjection]:
+    """Parse upstream_injections array; accept legacy inject_from_orchestrator object."""
+    raw = data.get("upstream_injections")
+    if raw is not None:
+        return [UpstreamInjection.from_dict(item) for item in raw]
+
+    legacy = data.get("inject_from_orchestrator") or {}
+    if isinstance(legacy, dict):
+        # Legacy: { "upstream_key": "injected_key" }
+        return [
+            UpstreamInjection(injected_key=injected, upstream_key=upstream)
+            for upstream, injected in legacy.items()
+        ]
+    return []
+
+
 @dataclass
 class ManifestToolEntry:
     """One tool entry from competency.manifest.json."""
@@ -42,7 +77,7 @@ class ManifestToolEntry:
     tool_description_user: str | None = None
     forced_arguments: dict[str, Any] = field(default_factory=dict)
     forced_arguments_from_env: dict[str, str] = field(default_factory=dict)
-    inject_from_orchestrator: dict[str, str] = field(default_factory=dict)
+    upstream_injections: list[UpstreamInjection] = field(default_factory=list)
     argument_aliases: dict[str, str] = field(default_factory=dict)
     input_schema: dict[str, Any] | None = None
     strip_orchestrator_injected: bool = True
@@ -61,7 +96,7 @@ class ManifestToolEntry:
             tool_description_user=data.get("tool_description_user"),
             forced_arguments=dict(data.get("forced_arguments") or {}),
             forced_arguments_from_env=dict(data.get("forced_arguments_from_env") or {}),
-            inject_from_orchestrator=dict(data.get("inject_from_orchestrator") or {}),
+            upstream_injections=parse_upstream_injections(data),
             argument_aliases=dict(data.get("argument_aliases") or {}),
             input_schema=data.get("input_schema"),
             strip_orchestrator_injected=data.get("strip_orchestrator_injected", True),
@@ -150,11 +185,25 @@ class ManifestToolRegistry:
 
     def _hidden_schema_keys(self, entry: ManifestToolEntry) -> set[str]:
         keys = set(entry.forced_arguments) | set(entry.forced_arguments_from_env)
-        keys |= set(entry.inject_from_orchestrator.values())
+        for injection in entry.upstream_injections:
+            keys.add(injection.upstream_key)
+            keys.add(injection.injected_key)
         keys |= set(entry.argument_aliases.values())
         if entry.strip_orchestrator_injected:
             keys |= ORCHESTRATOR_INJECTED_KEYS
         return keys
+
+    @staticmethod
+    def apply_upstream_injections(
+        arguments: dict[str, Any],
+        injections: list[UpstreamInjection],
+    ) -> dict[str, Any]:
+        """Copy orchestrator-injected values onto upstream field names (decoupled keys)."""
+        args = dict(arguments)
+        for injection in injections:
+            if injection.injected_key in args:
+                args[injection.upstream_key] = args[injection.injected_key]
+        return args
 
     def transform_tools_list(
         self,
@@ -219,9 +268,7 @@ class ManifestToolRegistry:
             ORCHESTRATOR_INJECTED_KEYS if entry.strip_orchestrator_injected else frozenset()
         )
 
-        for target, source in entry.inject_from_orchestrator.items():
-            if source in args:
-                args[target] = args[source]
+        args = self.apply_upstream_injections(args, entry.upstream_injections)
 
         audit_injected = {k: args.pop(k) for k in list(args) if k in strip_keys}
 

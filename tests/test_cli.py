@@ -38,6 +38,43 @@ def test_build_manifest_tools_with_mappings():
     assert tools[0]["forced_arguments"] == {"status": "open"}
 
 
+def test_build_manifest_writes_upstream_injections():
+    project = {
+        "tool_defaults": {},
+        "tool_mappings": {
+            "passthrough_unmapped": False,
+            "mappings": [{
+                "tool_name": "assign_to_me",
+                "upstream_tool_name": "get_tickets",
+                "upstream_injections": [
+                    {"injected_key": "user_email", "upstream_key": "assignee"},
+                ],
+            }],
+        },
+    }
+    tools = build_manifest_tools(UPSTREAM, project)
+    assert tools[0]["upstream_injections"] == [
+        {"injected_key": "user_email", "upstream_key": "assignee"},
+    ]
+
+
+def test_build_manifest_converts_legacy_inject_from_orchestrator():
+    project = {
+        "tool_defaults": {},
+        "tool_mappings": {
+            "passthrough_unmapped": False,
+            "mappings": [{
+                "tool_name": "assign_to_me",
+                "inject_from_orchestrator": {"assignee": "user_email"},
+            }],
+        },
+    }
+    tools = build_manifest_tools(UPSTREAM, project)
+    assert tools[0]["upstream_injections"] == [
+        {"injected_key": "user_email", "upstream_key": "assignee"},
+    ]
+
+
 def test_build_manifest_includes_handler_field():
     project = {
         "competency": {

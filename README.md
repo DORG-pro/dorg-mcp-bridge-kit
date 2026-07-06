@@ -18,7 +18,7 @@ Un'**unica immagine Docker generica** (`dorg-mcp-bridge`) legge a runtime:
 
 - `upstream_tool_name` — rename tool
 - `forced_arguments` / `forced_arguments_from_env` — injection verso upstream
-- `inject_from_orchestrator` — map `user_email` → campo upstream
+- `upstream_injections` — map esplicito `injected_key` → `upstream_key` (disaccoppiato da `injected_params`)
 - `argument_aliases` — rename parametri nello schema
 
 ### Tier 2 — codice custom
@@ -50,6 +50,154 @@ cp bridge\DOCUMENTATION.md.template DOCUMENTATION.md
 .\scripts\package-bridge.ps1 -Project project.config.json
 docker build -t yourregistry.azurecr.io/dorg-mcp-bridge:1.0.0 bridge/
 ```
+
+## `project.config.json`
+
+File di **configurazione di progetto** usato dal CLI `generate-manifest`. Non viene deployato nel container: il CLI lo legge, interroga l'MCP upstream e produce `competency.manifest.json`.
+
+Parti da `examples/project.config.example.json` (virtual tools + handler) o `examples/project.config.passthrough.json` (proxy 1:1).
+
+### Sezioni principali
+
+| Sezione | Obbligatoria | Scopo |
+|---|---|---|
+| `competency` | sì | Metadata competenza → header del manifest |
+| `upstream` | sì* | Endpoint MCP per `tools/list` in fase di generazione |
+| `tool_mappings` | no | Regole di mapping tool → voci `tools[]` nel manifest |
+| `tool_defaults` | no | Valori di default per tutti i tool generati |
+| `bridge` | no | Metadata bridge copiati in `manifest.bridge` |
+| `manifest_output` | no | Path output (default `competency.manifest.json`) |
+
+\*Richiesto in config o via `--endpoint` sul CLI.
+
+### `competency`
+
+Identità e presentazione della competenza. Campi comuni:
+
+| Campo | Obbligatorio | Descrizione |
+|---|---|---|
+| `id` | sì | `competency_id` (es. `acme.example.bridge`) |
+| `title` | sì | Nome in University |
+| `description` | sì | Descrizione business |
+| `version` | no | Versione semver (default `1.0.0`) |
+| `vcpu` / `ram` | no | Risorse container (default `0.5` / `1.0`) |
+| `health_path` / `mcp_path` | no | Path bridge (default `/health`, `/mcp`) |
+| `docker_image` | no | Riferimento immagine in manifest |
+| `supported_dorg_versions` | no | Compatibilità runtime (default `["3.*"]`) |
+| `intended_usage` | no | Casi d'uso per University |
+| `documentation` | no | Path docs (default `/docs/<id>`) |
+| `env` | no | Variabili che l'operatore configura in Console → `competency_env` nel manifest |
+
+Ogni entry in `competency.env`:
+
+| Campo | Descrizione |
+|---|---|
+| `key` | Nome variabile ENV nel container |
+| `label` | Etichetta UI Console |
+| `description` | Testo di aiuto |
+| `required` | Obbligatoria all'install (default `true`) |
+| `secret` | Salvata in Key Vault se `true` |
+
+**Non inserire mai valori segreti** in `project.config.json` — solo dichiarazioni.
+
+### `upstream`
+
+Usato dal CLI per chiamare `tools/list` sull'MCP remoto durante la generazione.
+
+| Campo | Descrizione |
+|---|---|
+| `endpoint` | URL MCP Streamable-HTTP |
+| `auth_header_name` | Header credenziale (default `X-Api-Key`) |
+| `api_key` | Solo per generazione locale; preferire `--api-key` o variabile d'ambiente |
+
+### `tool_defaults`
+
+Default applicati a ogni tool nel manifest generato, se non overridden nel mapping:
+
+```json
+"tool_defaults": {
+  "allowed_groups": ["all_users"],
+  "injected_params": [{ "key": "user_email" }],
+  "retention": {
+    "message_retention_hours": 24,
+    "log_retention_hours": 168
+  }
+}
+```
+
+### `tool_mappings`
+
+Controlla quali tool upstream finiscono nel manifest e come vengono esposti.
+
+| Campo | Default | Descrizione |
+|---|---|---|
+| `passthrough_unmapped` | `true` | Se `true`, include tutti i tool upstream non mappati/esclusi |
+| `exclude_upstream` | `[]` | Nomi tool upstream da non esporre |
+| `mappings` | `[]` | Lista mapping espliciti (virtual tools e/o handler) |
+
+Ogni elemento di `mappings`:
+
+| Campo | Tier | Descrizione |
+|---|---|---|
+| `tool_name` | — | Nome esposto al dorg (`tool_name` nel manifest) |
+| `upstream_tool_name` | 1 | Tool reale upstream; omesso = uguale a `tool_name` |
+| `tool_description` | — | Descrizione nel manifest e in `tools/list` |
+| `tool_name_user` / `tool_description_user` | — | Etichette UI University |
+| `forced_arguments` | 1 | Argomenti fissi verso upstream |
+| `forced_arguments_from_env` | 1 | Map `arg → env_var` (env dichiarata in `competency.env`) |
+| `upstream_injections` | 1 | Map orchestrator → upstream con chiavi distinte (vedi sotto) |
+| `argument_aliases` | 1 | Rename parametri LLM nello schema (es. `customer_email` → `customerId`) |
+| `handler` | 2 | Nome handler in `competency_handlers.py` |
+| `input_schema` | 2 | Schema MCP per tool con handler (se non definito nel codice) |
+| `allowed_groups` | — | Override di `tool_defaults` |
+| `injected_params` | — | Override di `tool_defaults` |
+| `retention` | — | Override policy logging |
+| `concurrency` | — | Limite chiamate concorrenti |
+
+#### `upstream_injections` — disaccoppiamento chiavi
+
+`injected_params` nel manifest dichiara cosa il **Dorg orchestrator** inietta (`user_email`, …).
+L'**upstream MCP** può usare nomi diversi (`assignee`, `reporterName`, …).
+
+```json
+"upstream_injections": [
+  { "injected_key": "user_email", "upstream_key": "assignee" },
+  { "injected_key": "user_display_name", "upstream_key": "reporterName" }
+],
+"injected_params": [{ "key": "user_email" }, { "key": "user_display_name" }]
+```
+
+| Campo | Ruolo |
+|---|---|
+| `injected_key` | Chiave ricevuta dal bridge negli `arguments` (vocabolario orchestrator) |
+| `upstream_key` | Chiave inviata al MCP remoto su `tools/call` |
+
+Entrambe le chiavi sono **nascoste** dall'`inputSchema` esposto al dorg. Il formato legacy `inject_from_orchestrator: { "assignee": "user_email" }` resta supportato ma deprecato.
+
+### `bridge`
+
+Metadata opzionali copiati nel manifest sotto `bridge` (es. header auth upstream):
+
+```json
+"bridge": {
+  "upstream_auth_header": "X-Api-Key"
+}
+```
+
+### Flusso config → manifest
+
+```
+project.config.json
+       │
+       ├─ competency.*     → competency_id, title, env, vcpu, …
+       ├─ tool_mappings    → tools[] (con upstream_tool_name, forced_*, handler)
+       └─ tool_defaults    → allowed_groups, injected_params, retention
+       │
+       ▼  generate-manifest (+ tools/list upstream)
+competency.manifest.json  → deployato nel container + pubblicato su University
+```
+
+Template completi: `examples/project.config.example.json`, `examples/project.config.passthrough.json`.
 
 ## CLI
 

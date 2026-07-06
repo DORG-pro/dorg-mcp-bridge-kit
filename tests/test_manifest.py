@@ -78,7 +78,45 @@ def test_virtual_tool_forces_and_strips():
     assert injected["user_email"] == "a@example.com"
 
 
-def test_inject_from_orchestrator():
+def test_upstream_injections_decoupled_keys():
+    manifest = _manifest({
+        "tools": [{
+            "tool_name": "update_ticket",
+            "upstream_injections": [
+                {"injected_key": "user_email", "upstream_key": "assignee"},
+            ],
+            "tool_description": "x",
+        }],
+    })
+    registry = ManifestToolRegistry(manifest)
+    tools = registry.transform_tools_list([
+        {
+            "name": "update_ticket",
+            "description": "Update",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "assignee": {"type": "string"},
+                    "user_email": {"type": "string"},
+                    "ticket_id": {"type": "string"},
+                },
+                "required": ["ticket_id", "assignee"],
+            },
+        },
+    ])
+    props = tools[0]["inputSchema"]["properties"]
+    assert "assignee" not in props
+    assert "user_email" not in props
+    assert "ticket_id" in props
+
+    _, args, _ = registry.resolve_call(
+        "update_ticket", {"ticket_id": "TKT-1", "user_email": "me@example.com"},
+    )
+    assert args["assignee"] == "me@example.com"
+    assert "user_email" not in args
+
+
+def test_legacy_inject_from_orchestrator_still_parsed():
     manifest = _manifest({
         "tools": [{
             "tool_name": "create_ticket",
@@ -87,7 +125,10 @@ def test_inject_from_orchestrator():
         }],
     })
     registry = ManifestToolRegistry(manifest)
-    registry.transform_tools_list(UPSTREAM_TOOLS)
+    registry.transform_tools_list([{
+        "name": "create_ticket",
+        "inputSchema": {"type": "object", "properties": {"assignee": {}, "title": {}}},
+    }])
     _, args, _ = registry.resolve_call(
         "create_ticket", {"title": "Hi", "user_email": "me@example.com"},
     )

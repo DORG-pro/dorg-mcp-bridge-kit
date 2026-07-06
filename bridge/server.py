@@ -1,7 +1,7 @@
 """
 Dorg MCP bridge — static runtime, manifest-driven routing.
 
-Tier 1 (declarative): tool rename, forced_arguments, inject_from_orchestrator,
+Tier-1 (declarative): tool rename, forced_arguments, upstream_injections,
   argument_aliases — all from competency.manifest.json.
 Tier 2 (custom code): tools with `handler` field delegate to handlers.py.
 

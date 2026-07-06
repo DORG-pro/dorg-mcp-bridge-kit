@@ -24,7 +24,7 @@ Nessun codice Python. Campi nel manifest per tool entry:
 | `upstream_tool_name` | Tool reale upstream; omesso = passthrough 1:1 |
 | `forced_arguments` | `{ "status": "open" }` — mergiati su ogni call, nascosti dallo schema |
 | `forced_arguments_from_env` | `{ "customerId": "DEFAULT_CUSTOMER_ID" }` — valore da env container |
-| `inject_from_orchestrator` | `{ "assignee": "user_email" }` — map injected → arg upstream |
+| `upstream_injections` | `[{ "injected_key": "user_email", "upstream_key": "assignee" }]` — disaccoppia orchestrator/upstream |
 | `argument_aliases` | `{ "customer_email": "customerId" }` — rename param nello schema |
 | `injected_params` | Vocabolario chiuso Dorg — orchestrator → bridge (audit / map) |
 
@@ -96,9 +96,26 @@ Mappings in `tool_mappings` (solo per generazione CLI → finiscono nel manifest
 | `injected_params` | Dorg orchestrator | manifest (consenso utente) |
 | `forced_arguments` | Bridge da manifest | manifest |
 | `forced_arguments_from_env` | Bridge da ENV | manifest + `competency_env` |
-| `inject_from_orchestrator` | Bridge map a runtime | manifest |
+| `upstream_injections` | Bridge: `injected_key` → `upstream_key` | manifest |
+| `injected_params` | Dichiarazione consenso orchestrator | manifest |
 
-`channel` (orchestrator) ≠ `sourceChannel` (business upstream). Per forzare `sourceChannel: teams` usa `forced_arguments`.
+### `upstream_injections`
+
+Usa sempre la forma esplicita (non confondere le due chiavi):
+
+```json
+"upstream_injections": [
+  { "injected_key": "user_email", "upstream_key": "assignee" }
+],
+"injected_params": [{ "key": "user_email" }]
+```
+
+- `injected_params` → cosa il **cliente approva** e l'orchestrator inietta
+- `upstream_injections` → come il **bridge rinomina** verso il MCP remoto
+
+Tier-2: `ctx.map_injected_to_upstream(arguments)` applica le stesse regole del manifest.
+
+Legacy deprecato: `inject_from_orchestrator: { "assignee": "user_email" }`.
 
 Elenco chiavi orchestrator: `python -m cli list-injected-params`
 

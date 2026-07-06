@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from manifest import ManifestToolEntry
+from manifest import ManifestToolEntry, ManifestToolRegistry
 
 
 ForwardFn = Callable[[str, dict[str, Any], Any], Awaitable[dict[str, Any]]]
@@ -28,3 +28,9 @@ class HandlerContext:
     ) -> dict[str, Any]:
         name = upstream_name or self.entry.resolved_upstream_name()
         return await self.forward_upstream(name, arguments or {}, self.req_id)
+
+    def map_injected_to_upstream(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Apply manifest upstream_injections (decoupled injected_key → upstream_key)."""
+        return ManifestToolRegistry.apply_upstream_injections(
+            arguments, self.entry.upstream_injections
+        )
