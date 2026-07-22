@@ -14,9 +14,9 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-COPY server.py manifest.py competency_handlers.py ./
+COPY server.py manifest.py oauth.py competency_handlers.py ./
 COPY handlers/ ./handlers/
-COPY competency.manifest.json DOCUMENTATION.md ./
+COPY competency.manifest.json DOCUMENTATION.md icon.png ./
 
 RUN useradd --create-home --uid 10001 appuser
 USER appuser

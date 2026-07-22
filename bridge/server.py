@@ -19,6 +19,7 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+import oauth
 from handlers import HandlerContext, get_handler, get_handler_schemas, load_handlers
 from manifest import ORCHESTRATOR_INJECTED_KEYS, ManifestConfig, ManifestToolRegistry
 
@@ -62,12 +63,15 @@ logger = logging.getLogger(SERVER_NAME)
 app = FastAPI(title="Dorg MCP bridge", version=SERVER_VERSION)
 
 _DOC_PATH = Path(os.getenv("DOCUMENTATION_PATH", "DOCUMENTATION.md"))
+_ICON_PATH = Path(os.getenv("ICON_PATH", "icon.png"))
 
 
-def _upstream_auth_headers() -> dict[str, str]:
+async def _upstream_auth_headers() -> dict[str, str]:
     headers: dict[str, str] = {}
     auth_header = MANIFEST.upstream_auth_header or UPSTREAM_AUTH_HEADER
-    if UPSTREAM_AUTH_MODE == "bearer" and UPSTREAM_BEARER_TOKEN:
+    if UPSTREAM_AUTH_MODE == "oauth":
+        headers["Authorization"] = f"Bearer {await oauth.get_access_token()}"
+    elif UPSTREAM_AUTH_MODE == "bearer" and UPSTREAM_BEARER_TOKEN:
         headers["Authorization"] = f"Bearer {UPSTREAM_BEARER_TOKEN}"
     elif UPSTREAM_API_KEY:
         headers[auth_header] = UPSTREAM_API_KEY
@@ -108,18 +112,26 @@ def _parse_mcp_response(resp: httpx.Response) -> dict:
     return resp.json()
 
 
+async def _post_upstream(rpc: dict) -> httpx.Response:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        **(await _upstream_auth_headers()),
+    }
+
+    async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_SECONDS) as client:
+        return await client.post(UPSTREAM_MCP_ENDPOINT, headers=headers, json=rpc)
+
+
 async def _forward_upstream(rpc: dict) -> dict:
     if not UPSTREAM_MCP_ENDPOINT:
         raise RuntimeError("UPSTREAM_MCP_ENDPOINT is not configured.")
 
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        **_upstream_auth_headers(),
-    }
-
-    async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_SECONDS) as client:
-        resp = await client.post(UPSTREAM_MCP_ENDPOINT, headers=headers, json=rpc)
+    resp = await _post_upstream(rpc)
+    if resp.status_code == 401 and UPSTREAM_AUTH_MODE == "oauth":
+        # Access token may have been revoked before expiry: refresh once and retry.
+        oauth.invalidate()
+        resp = await _post_upstream(rpc)
     resp.raise_for_status()
     return _parse_mcp_response(resp)
 
@@ -151,6 +163,13 @@ async def docs(competency_id: str) -> Response:
     if not _DOC_PATH.exists():
         return PlainTextResponse("Documentation not found.", status_code=404)
     return PlainTextResponse(_DOC_PATH.read_text(encoding="utf-8"), media_type="text/markdown")
+
+
+@app.get("/icon")
+async def icon() -> Response:
+    if not _ICON_PATH.exists():
+        return PlainTextResponse("Icon not found.", status_code=404)
+    return Response(content=_ICON_PATH.read_bytes(), media_type="image/png")
 
 
 @app.post("/mcp")

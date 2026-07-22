@@ -10,3 +10,4 @@ bridges/*/.build/
 bridges/*/.env
 *.tar
 *.tar.gz
+.playwright-mcp/

@@ -54,12 +54,15 @@ def fetch_upstream_tools(
     api_key: str = "",
     auth_header: str = "X-Api-Key",
     timeout: float = 60.0,
+    bearer_token: str = "",
 ) -> list[dict[str, Any]]:
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
-    if api_key:
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    elif api_key:
         headers[auth_header] = api_key
 
     rpc = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
@@ -293,9 +296,10 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
     api_key = args.api_key or upstream.get("api_key") or ""
     auth_header = upstream.get("auth_header_name", "X-Api-Key")
+    bearer_token = args.bearer_token or ""
 
     print(f"Fetching tools from {endpoint} ...", file=sys.stderr)
-    upstream_tools = fetch_upstream_tools(endpoint, api_key, auth_header, args.timeout)
+    upstream_tools = fetch_upstream_tools(endpoint, api_key, auth_header, args.timeout, bearer_token)
     print(f"Found {len(upstream_tools)} upstream tool(s).", file=sys.stderr)
 
     manifest = build_manifest(project, upstream_tools)
@@ -362,6 +366,31 @@ def cmd_list_injected(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_oauth_bootstrap(args: argparse.Namespace) -> int:
+    from cli.oauth_bootstrap import run_bootstrap
+
+    try:
+        tokens = run_bootstrap(
+            client_id=args.client_id,
+            client_secret=args.client_secret,
+            scopes=args.scopes,
+            auth_url=args.auth_url,
+            token_url=args.token_url,
+            port=args.port,
+            timeout_seconds=args.timeout,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    expires_in = tokens.get("expires_in", "?")
+    print("Refresh token minted. Paste into the competency env — never commit it.", file=sys.stderr)
+    print(f"UPSTREAM_OAUTH_REFRESH_TOKEN={tokens['refresh_token']}")
+    print(f"# access token (valid ~{expires_in}s, usable for generate-manifest --bearer-token):")
+    print(f"# {tokens.get('access_token', '')}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dorg-bridge",
@@ -384,6 +413,10 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--project", "-p", help="Path to project.config.json (alternative)")
     gen.add_argument("--endpoint", "-e", help="Override upstream MCP endpoint URL")
     gen.add_argument("--api-key", help="Upstream API key for tools/list (optional)")
+    gen.add_argument(
+        "--bearer-token",
+        help="Send 'Authorization: Bearer <token>' for tools/list (e.g. an OAuth access token)",
+    )
     gen.add_argument("--output", "-o", help="Override manifest output path")
     gen.add_argument("--timeout", type=float, default=60.0)
     gen.set_defaults(func=cmd_generate)
@@ -402,6 +435,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     inj = sub.add_parser("list-injected-params", help="Print orchestrator injected param keys")
     inj.set_defaults(func=cmd_list_injected)
+
+    boot = sub.add_parser(
+        "oauth-bootstrap",
+        help="Interactive OAuth authorization-code flow: mint a refresh token (Google defaults)",
+    )
+    boot.add_argument("--client-id", required=True, help="OAuth client id")
+    boot.add_argument("--client-secret", required=True, help="OAuth client secret")
+    boot.add_argument("--scopes", required=True, help="Space-separated scopes")
+    boot.add_argument("--auth-url", default="https://accounts.google.com/o/oauth2/v2/auth")
+    boot.add_argument("--token-url", default="https://oauth2.googleapis.com/token")
+    boot.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        help="Local callback port (default: random). Web-type clients must register "
+        "http://localhost:<port>/callback as redirect URI; Desktop-type clients accept any port.",
+    )
+    boot.add_argument("--timeout", type=float, default=300.0, help="Seconds to wait for the browser consent")
+    boot.set_defaults(func=cmd_oauth_bootstrap)
 
     return parser
 

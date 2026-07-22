@@ -113,7 +113,7 @@ def assemble_build_context(ws: BridgeWorkspace) -> Path:
         shutil.rmtree(ws.build_dir)
     ws.build_dir.mkdir(parents=True)
 
-    for name in ("requirements.txt", "server.py", "manifest.py", "Dockerfile"):
+    for name in ("requirements.txt", "server.py", "manifest.py", "oauth.py", "Dockerfile"):
         shutil.copy2(RUNTIME_DIR / name, ws.build_dir / name)
 
     shutil.copytree(RUNTIME_DIR / "handlers", ws.build_dir / "handlers")
@@ -126,6 +126,11 @@ def assemble_build_context(ws: BridgeWorkspace) -> Path:
         template = RUNTIME_DIR / "DOCUMENTATION.md.template"
         if template.exists():
             shutil.copy2(template, ws.build_dir / "DOCUMENTATION.md")
+
+    icon = ws.root / "icon.png"
+    if not icon.exists():
+        icon = RUNTIME_DIR / "icon.default.png"
+    shutil.copy2(icon, ws.build_dir / "icon.png")
 
     stub = RUNTIME_DIR / "competency_handlers.stub.py"
     if ws.handlers.exists():

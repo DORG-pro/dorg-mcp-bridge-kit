@@ -23,7 +23,9 @@ python -m cli generate-manifest --bridge my-service
 
 # Package + Docker
 python -m cli package --bridge my-service
-docker build -t yourregistry.azurecr.io/my-service:1.0.0 bridges/my-service/.build
+# SOURCE_DATE_EPOCH forces a UTC `created` timestamp: Azure Container Apps
+# rejects images with a local offset (e.g. +02:00, Docker 29+/podman).
+SOURCE_DATE_EPOCH=$(date +%s) docker build -t yourregistry.azurecr.io/my-service:1.0.0 bridges/my-service/.build
 ```
 
 PowerShell helpers: `scripts/init-bridge.ps1`, `scripts/package-bridge.ps1`, `scripts/build-bridge.ps1`.

@@ -70,6 +70,23 @@ def test_health(bridge_client):
     assert client.get("/health").json() == {"status": "ok"}
 
 
+def test_icon_served_when_present(bridge_client, monkeypatch, tmp_path):
+    client, server = bridge_client
+    icon = tmp_path / "icon.png"
+    icon.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    monkeypatch.setattr(server, "_ICON_PATH", icon)
+    r = client.get("/icon")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content.startswith(b"\x89PNG")
+
+
+def test_icon_404_when_missing(bridge_client, monkeypatch, tmp_path):
+    client, server = bridge_client
+    monkeypatch.setattr(server, "_ICON_PATH", tmp_path / "missing.png")
+    assert client.get("/icon").status_code == 404
+
+
 def test_tier1_tools_call(bridge_client, monkeypatch):
     client, server = bridge_client
     captured = {}

@@ -147,7 +147,7 @@ Minimo quasi sempre: `UPSTREAM_MCP_ENDPOINT`. Aggiungi `UPSTREAM_API_KEY` / bear
 
 | Domanda | Uso |
 |---|---|
-| **Registry Docker** e tag immagine? | `competency_docker_image`, `docker build -t ...` |
+| **Registry Docker** e tag immagine? | `competency_docker_image`, `SOURCE_DATE_EPOCH=$(date +%s) docker build -t ...` |
 | **`intended_usage`** — 2–5 frasi "Use when…" / "Do not use…"? | Manifest University |
 | **vCPU / RAM** container? | Default `0.5` / `1.0` se non specificato |
 | **Documentazione utente** — cosa deve sapere il collega che usa la skill? | `bridges/<nome>/DOCUMENTATION.md` |
@@ -191,7 +191,9 @@ Conferma con l'utente:
 5. Se handler richiesti: edita bridges/<nome>/competency_handlers.py
 6. Edita bridges/<nome>/DOCUMENTATION.md
 7. python -m cli package --bridge <nome>
-8. docker build -t <registry>/<image>:<tag> bridges/<nome>/.build
+8. SOURCE_DATE_EPOCH=$(date +%s) docker build -t <registry>/<image>:<tag> bridges/<nome>/.build
+   # SOURCE_DATE_EPOCH obbligatorio: Azure Container Apps rifiuta immagini con
+   # timestamp `created` non-UTC (Docker 29+/containerd store, podman)
 ```
 
 ## project.config.json
@@ -274,7 +276,12 @@ Il router in `server.py`:
 | `UPSTREAM_MCP_ENDPOINT` | URL MCP remoto |
 | `UPSTREAM_API_KEY` | Credenziale (header configurabile) |
 | `UPSTREAM_BEARER_TOKEN` | Alternativa bearer |
-| `UPSTREAM_AUTH_MODE` | `api_key` o `bearer` |
+| `UPSTREAM_AUTH_MODE` | `api_key`, `bearer` o `oauth` |
+| `UPSTREAM_OAUTH_TOKEN_URL` | Token endpoint OAuth (default Google) |
+| `UPSTREAM_OAUTH_CLIENT_ID` | Client id OAuth (mode `oauth`) |
+| `UPSTREAM_OAUTH_CLIENT_SECRET` | Client secret OAuth (mode `oauth`) |
+| `UPSTREAM_OAUTH_REFRESH_TOKEN` | Refresh token (da `python -m cli oauth-bootstrap`) |
+| `UPSTREAM_OAUTH_SCOPES` | Scope opzionali (spazio-separati) |
 | `BRIDGE_AUTH_TOKEN` | Bearer orchestrator → bridge |
 | `MANIFEST_PATH` | Default `competency.manifest.json` |
 | `HANDLERS_MODULE` | Default `competency_handlers` |
