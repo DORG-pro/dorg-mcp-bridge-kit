@@ -140,6 +140,7 @@ Per ogni variabile che l'operatore configurerà:
 | Etichetta e descrizione per Console? | `label`, `description` |
 | Obbligatoria? | `required` |
 | Segreto (Key Vault)? | `secret` |
+| È un interruttore acceso/spento? | `type: "boolean"` — la Console mostra un toggle e scrive `1`/`0`; usalo sempre per i flag invece di far digitare 0 o 1 all'operatore (solo variabili non segrete) |
 
 Minimo quasi sempre: `UPSTREAM_MCP_ENDPOINT`. Aggiungi `UPSTREAM_API_KEY` / bearer solo se l'upstream lo richiede. Aggiungi env custom solo se usate in `forced_arguments_from_env`.
 
