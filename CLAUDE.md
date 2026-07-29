@@ -162,6 +162,7 @@ Conferma con l'utente:
 - [ ] Per ogni tool non banale: mapping, groups, injected, forced args documentati
 - [ ] Nessun segreto nel manifest o in `project.config.json`
 - [ ] Tier-2 giustificato solo dove serve
+- [ ] Testi user-facing in linguaggio semplice, senza diciture tecniche tra parentesi, e tradotti in tutte le lingue del portale (italiano e inglese)
 
 ### Ordine operativo dopo le risposte
 
@@ -180,6 +181,14 @@ Conferma con l'utente:
 - Valori di API key, bearer o password (solo *se* servono e *come* dichiararli in env).
 - Dettagli implementativi del runtime condiviso (`bridge/server.py`) — non si forkano per competenza.
 - Conferma su ogni singolo tool se l'utente ha chiesto passthrough completo e non ci sono tool da escludere.
+
+## Testi user-facing (portale e Console)
+
+I testi letti da colleghi e operatori — `competency_description`, `label` e `description` delle env, `DOCUMENTATION.md`, le descrizioni inserite nel form del portale — non sono documentazione tecnica:
+
+- **Linguaggio semplice.** Scrivi per chi usa la competenza, non per chi l'ha sviluppata: niente nomi di librerie, versioni, protocolli o sigle, e **mai diciture tecniche tra parentesi tonde** come "(base64)", "(pinned 1.0.0)", "(default 10 MB)". Se un dettaglio tecnico è indispensabile per l'operatore, spiegalo con una frase intera in parole comuni.
+- **Tutte le lingue del portale.** Fornisci i testi user-facing tradotti in tutte le lingue supportate dal portale Dorg — oggi **italiano e inglese**. Convenzione: `DOCUMENTATION.md` in italiano e `DOCUMENTATION.en.md` in inglese, con dentro una sezione "Configurazione"/"Configuration" che traduce anche label e descrizioni delle variabili. Per i campi del manifest che ammettono una sola stringa (`competency_description`, `label`/`description` delle env) usa l'italiano, la lingua principale del portale: la versione nelle altre lingue resta pronta nella documentazione tradotta.
+- I testi destinati al modello (`tool_description`, `intended_usage`) non sono mostrati a colleghi e operatori: restano in inglese e possono essere tecnici e precisi.
 
 ## Workflow agente
 
