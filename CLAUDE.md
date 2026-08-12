@@ -279,6 +279,25 @@ Il router in `server.py`:
 - altrimenti → `manifest.py` tier-1
 - tool non in manifest → non esposto (se manifest.tools non vuoto)
 
+## File handoff tra competenze (tier-2)
+
+Per spostare byte tra competenze senza farli passare dal contesto del modello,
+il runtime offre due helper importabili dagli handler (`from handlers import
+publish_file, fetch_url, HandoffError`):
+
+- `await publish_file(data=... | path=..., file_name=..., media_type=..., ttl_seconds=..., single_use=True)`
+  → registra il file e restituisce un URL pubblico `https://<bridge>/files/<token>`.
+  Il token è monouso e scade dopo poco (default 10 minuti): è l'URL stesso a fare
+  da autorizzazione. L'altra competenza lo scarica server-to-server (es.
+  `manage_file` con `source=url`).
+- `await fetch_url(url, max_bytes=...)` → scarica un URL https pubblico lato
+  server con protezioni anti-SSRF (solo https, host risolto su indirizzi
+  pubblici, validazione ripetuta a ogni redirect, cap dimensione) e restituisce
+  `FetchedFile(file_name, data, media_type)`.
+
+Regola per gli `intended_usage` delle competenze storage: nei trasferimenti tra
+competenze passare i link, mai ricreare il contenuto né incollarlo in chat.
+
 ## ENV bridge
 
 | Variabile | Scopo |
@@ -295,6 +314,10 @@ Il router in `server.py`:
 | `BRIDGE_AUTH_TOKEN` | Bearer orchestrator → bridge |
 | `MANIFEST_PATH` | Default `competency.manifest.json` |
 | `HANDLERS_MODULE` | Default `competency_handlers` |
+| `BRIDGE_PUBLIC_BASE_URL` | Base URL pubblico per i link `/files/<token>` (default: FQDN Container Apps) |
+| `HANDOFF_TTL_SECONDS` | Scadenza dei link di handoff (default 600) |
+| `HANDOFF_MAX_FETCH_MB` | Cap dimensione per `fetch_url` (default 200) |
+| `HANDOFF_FETCH_TIMEOUT_SECONDS` | Timeout `fetch_url` (default 120) |
 
 ## Validazione
 
