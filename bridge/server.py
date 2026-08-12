@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 import oauth
 from handlers import HandlerContext, get_handler, get_handler_schemas, load_handlers
+from handlers import handoff
 from manifest import ORCHESTRATOR_INJECTED_KEYS, ManifestConfig, ManifestToolRegistry
 
 # ─── Runtime configuration (ENV only — never bake secrets into the image) ─────
@@ -170,6 +171,27 @@ async def icon() -> Response:
     if not _ICON_PATH.exists():
         return PlainTextResponse("Icon not found.", status_code=404)
     return Response(content=_ICON_PATH.read_bytes(), media_type="image/png")
+
+
+@app.get("/files/{token}")
+async def files(token: str) -> Response:
+    # The unguessable single-use token IS the authorization for this route:
+    # it is minted by a tier-2 handler via handoff.publish_file() and expires
+    # after a short TTL, so no bearer check applies here.
+    entry = await handoff.store.take(token)
+    if entry is None:
+        return PlainTextResponse("Unknown or expired file token.", status_code=404)
+    if entry.data is not None:
+        content = entry.data
+    elif entry.path is not None and entry.path.is_file():
+        content = entry.path.read_bytes()
+    else:
+        return PlainTextResponse("Published file is gone.", status_code=410)
+    return Response(
+        content=content,
+        media_type=entry.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{entry.file_name}"'},
+    )
 
 
 @app.post("/mcp")

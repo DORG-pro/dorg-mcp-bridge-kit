@@ -1,0 +1,253 @@
+"""
+One-shot file handoff between competencies.
+
+Two halves, both meant for tier-2 handlers:
+
+- publish_file(): register a file (bytes or a path on the container disk) and
+  get back a public URL served by this bridge at GET /files/<token>. Tokens
+  are unguessable, expire after a short TTL and are single-use by default, so
+  the URL is a capability that another competency (e.g. manage_file with
+  source=url) can redeem exactly once. File bytes never travel through the
+  model context.
+
+- fetch_url(): download a public https URL server-side with SSRF guards:
+  scheme and resolved host are validated on the initial URL and on every
+  redirect hop, and the size cap is enforced both on Content-Length and while
+  streaming the body. Validation resolves DNS separately from the actual
+  connection, so a hostile nameserver flipping records between the two lookups
+  is not fully excluded — same trade-off as the platform's manage_file URL
+  download, acceptable for fetching from trusted competency ingresses.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import ipaddress
+import os
+import re
+import secrets
+import socket
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+
+import httpx
+
+# ─── Runtime configuration (module-level, monkeypatchable in tests) ───────────
+HANDOFF_TTL_SECONDS = float(os.getenv("HANDOFF_TTL_SECONDS", "600"))
+HANDOFF_MAX_FETCH_BYTES = int(float(os.getenv("HANDOFF_MAX_FETCH_MB", "200")) * 1024 * 1024)
+HANDOFF_FETCH_TIMEOUT_SECONDS = float(os.getenv("HANDOFF_FETCH_TIMEOUT_SECONDS", "120"))
+BRIDGE_PUBLIC_BASE_URL = os.getenv("BRIDGE_PUBLIC_BASE_URL", "")
+
+_MAX_REDIRECTS = 3
+
+
+class HandoffError(Exception):
+    """Raised for invalid publish/fetch requests; the message is safe to show the model."""
+
+
+# ─── Publish side: token store served by GET /files/<token> ───────────────────
+
+@dataclass
+class PublishedFile:
+    path: Path | None
+    data: bytes | None
+    file_name: str
+    media_type: str
+    expires_at: float
+    single_use: bool
+
+
+class HandoffStore:
+    """In-memory registry of published files, keyed by unguessable token."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, PublishedFile] = {}
+        self._lock = asyncio.Lock()
+
+    async def publish(self, entry: PublishedFile) -> str:
+        token = secrets.token_urlsafe(32)
+        async with self._lock:
+            self._prune_expired()
+            self._entries[token] = entry
+        return token
+
+    async def take(self, token: str) -> PublishedFile | None:
+        """Return the entry for a live token, consuming it when single-use."""
+        async with self._lock:
+            self._prune_expired()
+            entry = self._entries.get(token)
+            if entry is None:
+                return None
+            if entry.single_use:
+                del self._entries[token]
+            return entry
+
+    def _prune_expired(self) -> None:
+        now = time.monotonic()
+        for token in [t for t, e in self._entries.items() if e.expires_at <= now]:
+            del self._entries[token]
+
+
+store = HandoffStore()
+
+
+def public_base_url() -> str:
+    """The https base URL another competency can reach this bridge at.
+
+    Explicit BRIDGE_PUBLIC_BASE_URL wins; otherwise fall back to the FQDN
+    Azure Container Apps exposes through its standard environment variables.
+    """
+    if BRIDGE_PUBLIC_BASE_URL:
+        return BRIDGE_PUBLIC_BASE_URL.rstrip("/")
+    app_name = os.getenv("CONTAINER_APP_NAME", "")
+    dns_suffix = os.getenv("CONTAINER_APP_ENV_DNS_SUFFIX", "")
+    if app_name and dns_suffix:
+        return f"https://{app_name}.{dns_suffix}"
+    raise HandoffError(
+        "The bridge does not know its public URL: set BRIDGE_PUBLIC_BASE_URL."
+    )
+
+
+async def publish_file(
+    *,
+    data: bytes | None = None,
+    path: str | Path | None = None,
+    file_name: str,
+    media_type: str = "application/octet-stream",
+    ttl_seconds: float | None = None,
+    single_use: bool = True,
+) -> str:
+    """Publish a file and return the public one-shot URL for it."""
+    if (data is None) == (path is None):
+        raise HandoffError("Provide exactly one of data or path.")
+    resolved_path: Path | None = None
+    if path is not None:
+        resolved_path = Path(path)
+        if not resolved_path.is_file():
+            raise HandoffError(f"No such file to publish: '{resolved_path}'.")
+    ttl = HANDOFF_TTL_SECONDS if ttl_seconds is None else ttl_seconds
+    token = await store.publish(
+        PublishedFile(
+            path=resolved_path,
+            data=data,
+            file_name=file_name,
+            media_type=media_type,
+            expires_at=time.monotonic() + ttl,
+            single_use=single_use,
+        )
+    )
+    return f"{public_base_url()}/files/{token}"
+
+
+# ─── Fetch side: SSRF-guarded server-side download ────────────────────────────
+
+@dataclass
+class FetchedFile:
+    file_name: str
+    data: bytes
+    media_type: str
+
+
+async def _resolve_host(host: str) -> list[str]:
+    loop = asyncio.get_running_loop()
+    infos = await loop.run_in_executor(
+        None, lambda: socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    )
+    return [info[4][0] for info in infos]
+
+
+async def validate_public_https_url(url: str) -> httpx.URL:
+    """Accept only https URLs whose host resolves exclusively to public addresses."""
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() != "https":
+        raise HandoffError(f"Only https URLs can be fetched, got '{parsed.scheme or 'none'}'.")
+    host = parsed.hostname
+    if not host:
+        raise HandoffError("The URL has no host.")
+    try:
+        addresses = [str(ipaddress.ip_address(host))]
+    except ValueError:
+        try:
+            addresses = await _resolve_host(host)
+        except OSError as exc:
+            raise HandoffError(f"Cannot resolve host '{host}': {exc}.") from exc
+    for address in addresses:
+        if not ipaddress.ip_address(address).is_global:
+            raise HandoffError(
+                f"Host '{host}' resolves to a non-public address; refusing to fetch."
+            )
+    return httpx.URL(url)
+
+
+def _file_name_from_response(url: httpx.URL, response: httpx.Response) -> str:
+    disposition = response.headers.get("content-disposition", "")
+    match = re.search(r"filename\*?=(?:UTF-8''|\"?)([^\";]+)", disposition, re.IGNORECASE)
+    if match:
+        candidate = Path(unquote(match.group(1).strip())).name
+        if candidate:
+            return candidate
+    candidate = Path(unquote(url.path)).name
+    return candidate or "download"
+
+
+async def fetch_url(
+    url: str,
+    *,
+    max_bytes: int | None = None,
+    timeout_seconds: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> FetchedFile:
+    """Fetch one file from a public https URL, following at most _MAX_REDIRECTS
+    redirects and re-validating scheme + resolved host on every hop."""
+    cap = HANDOFF_MAX_FETCH_BYTES if max_bytes is None else max_bytes
+    timeout = HANDOFF_FETCH_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    target = await validate_public_https_url(url)
+
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=False, transport=transport
+    ) as client:
+        hops = 0
+        while True:
+            request = client.build_request("GET", target)
+            response = await client.send(request, stream=True)
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("location")
+                await response.aclose()
+                if not location:
+                    raise HandoffError(f"Redirect from '{target}' carries no location.")
+                hops += 1
+                if hops > _MAX_REDIRECTS:
+                    raise HandoffError(f"Too many redirects (>{_MAX_REDIRECTS}) fetching '{url}'.")
+                target = await validate_public_https_url(str(target.join(location)))
+                continue
+            break
+
+        try:
+            if response.status_code != 200:
+                raise HandoffError(f"GET '{target}' returned HTTP {response.status_code}.")
+            declared = response.headers.get("content-length")
+            if declared is not None and int(declared) > cap:
+                raise HandoffError(
+                    f"Remote file is {int(declared)} bytes, above the {cap}-byte transfer cap."
+                )
+            chunks: list[bytes] = []
+            received = 0
+            async for chunk in response.aiter_bytes():
+                received += len(chunk)
+                if received > cap:
+                    raise HandoffError(
+                        f"Remote file exceeds the {cap}-byte transfer cap."
+                    )
+                chunks.append(chunk)
+        finally:
+            await response.aclose()
+
+    media_type = response.headers.get("content-type", "application/octet-stream")
+    media_type = media_type.split(";", 1)[0].strip() or "application/octet-stream"
+    return FetchedFile(
+        file_name=_file_name_from_response(target, response),
+        data=b"".join(chunks),
+        media_type=media_type,
+    )
