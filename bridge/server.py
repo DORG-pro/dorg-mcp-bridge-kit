@@ -17,7 +17,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 import oauth
 from handlers import HandlerContext, get_handler, get_handler_schemas, load_handlers
@@ -181,17 +181,24 @@ async def files(token: str) -> Response:
     entry = await handoff.store.take(token)
     if entry is None:
         return PlainTextResponse("Unknown or expired file token.", status_code=404)
+    disposition = {"Content-Disposition": f'attachment; filename="{entry.file_name}"'}
     if entry.data is not None:
-        content = entry.data
-    elif entry.path is not None and entry.path.is_file():
-        content = entry.path.read_bytes()
-    else:
-        return PlainTextResponse("Published file is gone.", status_code=410)
-    return Response(
-        content=content,
-        media_type=entry.media_type,
-        headers={"Content-Disposition": f'attachment; filename="{entry.file_name}"'},
-    )
+        return Response(
+            content=entry.data,
+            media_type=entry.media_type,
+            headers=disposition,
+        )
+    if entry.path is not None and entry.path.is_file():
+        # Stream from disk instead of reading the whole file into memory: a
+        # bridge container is sized for its own work, not for holding a
+        # multi-hundred-megabyte transfer in RAM while it is being served.
+        return FileResponse(
+            entry.path,
+            media_type=entry.media_type,
+            filename=entry.file_name,
+            headers=disposition,
+        )
+    return PlainTextResponse("Published file is gone.", status_code=410)
 
 
 @app.post("/mcp")
