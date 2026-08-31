@@ -342,3 +342,95 @@ async def test_fetch_url_without_to_path_keeps_returning_bytes(monkeypatch):
     assert fetched.path is None
     assert fetched.data == b"piccolo"
     assert fetched.read_bytes() == b"piccolo"
+
+
+# ─── HANDOFF_TRUSTED_HOSTS ─────────────────────────────────────────────────────
+# Due competenze schierate nello stesso ambiente Container Apps risolvono il
+# FQDN pubblico l'una dell'altra su un indirizzo interno: la regola anti-SSRF
+# bocciava proprio il trasferimento che esiste per rendere sicuro. L'esenzione
+# vale solo per gli host che l'operatore ha elencato.
+
+
+@pytest.mark.asyncio
+async def test_trusted_host_is_accepted_despite_private_resolution(monkeypatch):
+    async def resolve_private(host):
+        return ["10.0.0.42"]
+
+    monkeypatch.setattr(handoff, "_resolve_host", resolve_private)
+    monkeypatch.setenv("HANDOFF_TRUSTED_HOSTS", "files.internal.example.com")
+
+    url = await handoff.validate_public_https_url("https://files.internal.example.com/files/tok")
+
+    assert str(url) == "https://files.internal.example.com/files/tok"
+
+
+@pytest.mark.asyncio
+async def test_trust_is_per_host_not_blanket(monkeypatch):
+    """Elencare un host non apre la porta a tutti gli altri host interni."""
+
+    async def resolve_private(host):
+        return ["10.0.0.43"]
+
+    monkeypatch.setattr(handoff, "_resolve_host", resolve_private)
+    monkeypatch.setenv("HANDOFF_TRUSTED_HOSTS", "files.internal.example.com")
+
+    with pytest.raises(handoff.HandoffError):
+        await handoff.validate_public_https_url("https://altro.internal.example.com/files/tok")
+
+
+@pytest.mark.asyncio
+async def test_a_trusted_host_still_cannot_downgrade_to_http(monkeypatch):
+    monkeypatch.setenv("HANDOFF_TRUSTED_HOSTS", "files.internal.example.com")
+
+    with pytest.raises(handoff.HandoffError):
+        await handoff.validate_public_https_url("http://files.internal.example.com/files/tok")
+
+
+@pytest.mark.asyncio
+async def test_a_trusted_host_cannot_redirect_onto_an_untrusted_one(monkeypatch):
+    """L'host fidato non deve diventare un trampolino verso la rete interna."""
+
+    async def resolve_private(host):
+        return ["10.0.0.44"]
+
+    monkeypatch.setattr(handoff, "_resolve_host", resolve_private)
+    monkeypatch.setenv("HANDOFF_TRUSTED_HOSTS", "files.internal.example.com")
+
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            302, headers={"location": "https://metadata.internal.example.com/latest"}
+        )
+    )
+
+    with pytest.raises(handoff.HandoffError):
+        await handoff.fetch_url(
+            "https://files.internal.example.com/files/tok", transport=transport
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_list_tolerates_spacing_and_casing(monkeypatch):
+    async def resolve_private(host):
+        return ["10.0.0.45"]
+
+    monkeypatch.setattr(handoff, "_resolve_host", resolve_private)
+    monkeypatch.setenv("HANDOFF_TRUSTED_HOSTS", " Files.Internal.Example.COM , altro.example.com ")
+
+    url = await handoff.validate_public_https_url("https://files.internal.example.com/files/tok")
+
+    assert str(url) == "https://files.internal.example.com/files/tok"
+
+
+@pytest.mark.asyncio
+async def test_without_the_variable_nothing_is_trusted(monkeypatch):
+    async def resolve_private(host):
+        return ["10.0.0.46"]
+
+    monkeypatch.setattr(handoff, "_resolve_host", resolve_private)
+    monkeypatch.delenv("HANDOFF_TRUSTED_HOSTS", raising=False)
+
+    with pytest.raises(handoff.HandoffError) as err:
+        await handoff.validate_public_https_url("https://files.internal.example.com/files/tok")
+
+    # l'errore deve dire all'operatore cosa fare, non solo che ha fallito
+    assert "HANDOFF_TRUSTED_HOSTS" in str(err.value)

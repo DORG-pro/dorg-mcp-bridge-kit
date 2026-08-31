@@ -174,14 +174,34 @@ async def _resolve_host(host: str) -> list[str]:
     return [info[4][0] for info in infos]
 
 
+def trusted_handoff_hosts() -> frozenset[str]:
+    """Hosts the operator vouches for, exempt from the public-address rule.
+
+    Two competencies deployed side by side resolve each other's public FQDN to
+    an address inside their own network, so the anti-SSRF rule below rejects the
+    very handoff it exists to protect. Naming those peers explicitly keeps the
+    rule intact for every other URL: the exemption covers the hosts an operator
+    listed, not "anything that happens to be internal".
+    """
+    raw = os.getenv("HANDOFF_TRUSTED_HOSTS", "")
+    return frozenset(host.strip().lower() for host in raw.split(",") if host.strip())
+
+
 async def validate_public_https_url(url: str) -> httpx.URL:
-    """Accept only https URLs whose host resolves exclusively to public addresses."""
+    """Accept only https URLs whose host resolves exclusively to public addresses.
+
+    A host listed in HANDOFF_TRUSTED_HOSTS skips the address rule — never the
+    https requirement. This runs again on every redirect, so a trusted host
+    cannot bounce the fetch onto an untrusted one.
+    """
     parsed = urlsplit(url)
     if parsed.scheme.lower() != "https":
         raise HandoffError(f"Only https URLs can be fetched, got '{parsed.scheme or 'none'}'.")
     host = parsed.hostname
     if not host:
         raise HandoffError("The URL has no host.")
+    if host.lower() in trusted_handoff_hosts():
+        return httpx.URL(url)
     try:
         addresses = [str(ipaddress.ip_address(host))]
     except ValueError:
@@ -192,7 +212,9 @@ async def validate_public_https_url(url: str) -> httpx.URL:
     for address in addresses:
         if not ipaddress.ip_address(address).is_global:
             raise HandoffError(
-                f"Host '{host}' resolves to a non-public address; refusing to fetch."
+                f"Host '{host}' resolves to a non-public address; refusing to fetch. "
+                "If this is another competency deployed alongside this one, add its host "
+                "to HANDOFF_TRUSTED_HOSTS."
             )
     return httpx.URL(url)
 
