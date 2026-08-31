@@ -252,3 +252,93 @@ async def test_fetch_url_filename_falls_back_to_url_path(monkeypatch):
         "https://files.example.com/folder/archive.zip", transport=transport
     )
     assert fetched.file_name == "archive.zip"
+
+
+# ── Streaming: serving and fetching without holding the file in RAM ──────────
+# A bridge container is sized for its own work (the iCloud one runs on 1 GiB),
+# so a transfer that fits on disk must not have to fit in memory as well.
+
+
+def test_large_published_file_is_streamed_not_buffered(client, tmp_path, monkeypatch):
+    """Serving a published path must not read the whole file into memory."""
+    import asyncio
+
+    big = tmp_path / "big.bin"
+    big.write_bytes(b"x" * (5 * 1024 * 1024))
+
+    letti: list[Path] = []
+    originale = Path.read_bytes
+
+    def spia(self, *a, **k):
+        letti.append(self)
+        return originale(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_bytes", spia)
+
+    url = asyncio.run(handoff.publish_file(path=big, file_name="big.bin"))
+    token = url.rsplit("/", 1)[1]
+    resp = client.get(f"/files/{token}")
+
+    assert resp.status_code == 200
+    assert len(resp.content) == 5 * 1024 * 1024
+    assert big not in letti, "il file pubblicato è stato letto interamente in memoria"
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_can_stage_to_disk(monkeypatch, tmp_path):
+    """With to_path the bytes land on disk and never sit in the dataclass."""
+    _public_resolver(monkeypatch)
+    payload = b"y" * (2 * 1024 * 1024)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, content=payload, headers={"content-type": "application/pdf"}
+        )
+    )
+
+    destinazione = tmp_path / "staged.pdf"
+    fetched = await handoff.fetch_url(
+        "https://files.example.com/report.pdf", transport=transport, to_path=destinazione
+    )
+
+    assert fetched.data is None
+    assert fetched.path == destinazione
+    assert destinazione.read_bytes() == payload
+    assert fetched.media_type == "application/pdf"
+    assert fetched.read_bytes() == payload
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_to_disk_still_enforces_the_cap(monkeypatch, tmp_path):
+    """The cap holds while streaming, and a refused fetch leaves no file behind."""
+    _public_resolver(monkeypatch)
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=b"z" * 4096))
+
+    destinazione = tmp_path / "troppo-grande.bin"
+    with pytest.raises(handoff.HandoffError):
+        await handoff.fetch_url(
+            "https://files.example.com/big.bin",
+            transport=transport,
+            to_path=destinazione,
+            max_bytes=1024,
+        )
+
+    assert not destinazione.exists(), "un fetch rifiutato non deve lasciare file a metà"
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_without_to_path_keeps_returning_bytes(monkeypatch):
+    """The in-memory contract stays intact for the small-file callers."""
+    _public_resolver(monkeypatch)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, content=b"piccolo", headers={"content-type": "text/plain"}
+        )
+    )
+
+    fetched = await handoff.fetch_url(
+        "https://files.example.com/small.txt", transport=transport
+    )
+
+    assert fetched.path is None
+    assert fetched.data == b"piccolo"
+    assert fetched.read_bytes() == b"piccolo"

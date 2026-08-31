@@ -145,9 +145,25 @@ async def publish_file(
 
 @dataclass
 class FetchedFile:
+    """A fetched file, either in memory (`data`) or staged on disk (`path`).
+
+    Handlers that only forward the bytes elsewhere should ask for `to_path`:
+    a bridge container is sized for its own work, and holding a large transfer
+    in RAM is the difference between a slow copy and an OOM kill.
+    """
+
     file_name: str
-    data: bytes
     media_type: str
+    data: bytes | None = None
+    path: Path | None = None
+
+    def read_bytes(self) -> bytes:
+        """The content, reading it back from disk when the fetch was staged."""
+        if self.data is not None:
+            return self.data
+        if self.path is not None:
+            return self.path.read_bytes()
+        raise HandoffError("Fetched file carries neither data nor path.")
 
 
 async def _resolve_host(host: str) -> list[str]:
@@ -198,6 +214,7 @@ async def fetch_url(
     max_bytes: int | None = None,
     timeout_seconds: float | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    to_path: str | Path | None = None,
 ) -> FetchedFile:
     """Fetch one file from a public https URL, following at most _MAX_REDIRECTS
     redirects and re-validating scheme + resolved host on every hop."""
@@ -234,20 +251,34 @@ async def fetch_url(
                 )
             chunks: list[bytes] = []
             received = 0
-            async for chunk in response.aiter_bytes():
-                received += len(chunk)
-                if received > cap:
-                    raise HandoffError(
-                        f"Remote file exceeds the {cap}-byte transfer cap."
-                    )
-                chunks.append(chunk)
+            destination = Path(to_path) if to_path is not None else None
+            handle = destination.open("wb") if destination is not None else None
+            try:
+                async for chunk in response.aiter_bytes():
+                    received += len(chunk)
+                    if received > cap:
+                        raise HandoffError(
+                            f"Remote file exceeds the {cap}-byte transfer cap."
+                        )
+                    if handle is not None:
+                        handle.write(chunk)
+                    else:
+                        chunks.append(chunk)
+            except BaseException:
+                if handle is not None:
+                    handle.close()
+                    handle = None
+                    destination.unlink(missing_ok=True)  # type: ignore[union-attr]
+                raise
+            finally:
+                if handle is not None:
+                    handle.close()
         finally:
             await response.aclose()
 
     media_type = response.headers.get("content-type", "application/octet-stream")
     media_type = media_type.split(";", 1)[0].strip() or "application/octet-stream"
-    return FetchedFile(
-        file_name=_file_name_from_response(target, response),
-        data=b"".join(chunks),
-        media_type=media_type,
-    )
+    file_name = _file_name_from_response(target, response)
+    if to_path is not None:
+        return FetchedFile(file_name=file_name, media_type=media_type, path=Path(to_path))
+    return FetchedFile(file_name=file_name, media_type=media_type, data=b"".join(chunks))
