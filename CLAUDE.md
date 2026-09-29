@@ -191,6 +191,16 @@ I testi letti da colleghi e operatori — `competency_description`, `label` e `d
 - **Tutte le lingue del portale.** Fornisci i testi user-facing tradotti in tutte le lingue supportate dal portale Dorg — oggi **italiano e inglese**. Convenzione: `DOCUMENTATION.md` in italiano e `DOCUMENTATION.en.md` in inglese, con dentro una sezione "Configurazione"/"Configuration" che traduce anche label e descrizioni delle variabili. Per i campi del manifest che ammettono una sola stringa (`competency_description`, `label`/`description` delle env) usa l'italiano, la lingua principale del portale: la versione nelle altre lingue resta pronta nella documentazione tradotta.
 - I testi destinati al modello (`tool_description`, `intended_usage`) non sono mostrati a colleghi e operatori: restano in inglese e possono essere tecnici e precisi.
 
+## Tool definitions: compatte e stabili (prompt caching)
+
+Ogni tool che una competenza espone (nome, `tool_description`, `input_schema`) finisce nel blocco tools del prompt del modello e viaggia **a ogni chiamata** dell'agente che ha la competenza installata, spesso insieme ai tool di molte altre competenze. I provider che fanno prompt caching rileggono quel blocco a una frazione del prezzo solo se resta identico byte per byte tra una chiamata e l'altra: un blocco grande o instabile costa a ogni iterazione di ogni conversazione.
+
+- **Corte e precise.** `tool_description` in inglese, una o due frasi su cosa fa il tool e quando usarlo; niente esempi lunghi, niente ripetizioni di ciò che lo schema già dice. Le `description` dei parametri solo dove il nome non basta.
+- **Schema minimo.** Esponi solo i parametri che l'agente deve davvero passare: `forced_arguments` per i valori fissi e `argument_aliases` per rinominare, invece di lasciare nello schema campi che il modello non deve toccare. Niente schemi annidati o enum enormi copiati dall'upstream se un campo libero basta.
+- **Solo i tool che servono.** La strategia tool del manifest (allowlist/denylist) decide quanti tool paga ogni chiamata: esponi quelli utili al ruolo dell'agente, non l'intero catalogo upstream.
+- **Niente testo dinamico.** Mai date, contatori, valori di ambiente o identificativi nelle descrizioni o negli schemi: un byte diverso invalida la cache dei tools. L'insieme e l'ordine dei tool non devono cambiare da una chiamata all'altra.
+- **Cambiare a lotti.** Ogni modifica a nome, descrizione o schema fa riscrivere la cache dei tools alla chiamata successiva: raggruppa i ritocchi in una release, non uno per volta.
+
 ## Workflow agente
 
 ```
