@@ -434,3 +434,86 @@ async def test_without_the_variable_nothing_is_trusted(monkeypatch):
 
     # l'errore deve dire all'operatore cosa fare, non solo che ha fallito
     assert "HANDOFF_TRUSTED_HOSTS" in str(err.value)
+
+
+# ─── Competenze dello stesso dorg ──────────────────────────────────────────────
+# Il caso normale non deve chiedere niente all'operatore: due competenze dello
+# stesso dorg condividono il suffisso DNS dell'ambiente Container Apps, che
+# contiene un token casuale e non e' falsificabile dall'esterno.
+
+SUFFISSO = "politeflower-70dfddde.francecentral.azurecontainerapps.io"
+
+
+@pytest.fixture
+def stesso_ambiente(monkeypatch):
+    async def resolve_private(host):
+        return ["10.0.0.7"]
+
+    monkeypatch.setattr(handoff, "_resolve_host", resolve_private)
+    monkeypatch.setenv("CONTAINER_APP_ENV_DNS_SUFFIX", SUFFISSO)
+    monkeypatch.delenv("HANDOFF_TRUSTED_HOSTS", raising=False)
+
+
+@pytest.mark.asyncio
+async def test_a_sibling_competency_needs_no_configuration(stesso_ambiente):
+    url = await handoff.validate_public_https_url(f"https://files-dorg-david.{SUFFISSO}/files/tok")
+
+    assert str(url) == f"https://files-dorg-david.{SUFFISSO}/files/tok"
+
+
+@pytest.mark.asyncio
+async def test_another_environment_is_not_a_sibling(stesso_ambiente):
+    """Il suffisso di un altro ambiente non deve passare: il token e' diverso."""
+    altrove = "blackhill-c33eccd5.swedencentral.azurecontainerapps.io"
+
+    with pytest.raises(handoff.HandoffError):
+        await handoff.validate_public_https_url(f"https://files-dorg-proctor2.{altrove}/files/tok")
+
+
+@pytest.mark.asyncio
+async def test_a_lookalike_suffix_is_refused(stesso_ambiente):
+    """Il confronto e' sul punto di separazione, non su una sottostringa:
+    'cattivo-politeflower-...' non e' dentro '.politeflower-...'."""
+    with pytest.raises(handoff.HandoffError):
+        await handoff.validate_public_https_url(f"https://cattivo-{SUFFISSO}/files/tok")
+
+
+@pytest.mark.asyncio
+async def test_a_domain_that_merely_ends_with_the_suffix_text_is_refused(stesso_ambiente):
+    """Un dominio controllato da terzi non diventa fidato aggiungendo il
+    suffisso come sotto-dominio del proprio."""
+    with pytest.raises(handoff.HandoffError):
+        await handoff.validate_public_https_url(f"https://{SUFFISSO}.attaccante.example/files/tok")
+
+
+@pytest.mark.asyncio
+async def test_a_sibling_still_cannot_downgrade_to_http(stesso_ambiente):
+    with pytest.raises(handoff.HandoffError):
+        await handoff.validate_public_https_url(f"http://files-dorg-david.{SUFFISSO}/files/tok")
+
+
+@pytest.mark.asyncio
+async def test_a_sibling_cannot_redirect_onto_the_internal_network(stesso_ambiente):
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            302, headers={"location": "https://metadata.interna.example/latest"}
+        )
+    )
+
+    with pytest.raises(handoff.HandoffError):
+        await handoff.fetch_url(f"https://files-dorg-david.{SUFFISSO}/files/tok", transport=transport)
+
+
+@pytest.mark.asyncio
+async def test_outside_container_apps_nothing_is_trusted_for_free(monkeypatch):
+    """Senza il suffisso iniettato dalla piattaforma si torna alla sola regola
+    sull'indirizzo: nessuna esenzione implicita."""
+    async def resolve_private(host):
+        return ["10.0.0.8"]
+
+    monkeypatch.setattr(handoff, "_resolve_host", resolve_private)
+    monkeypatch.delenv("CONTAINER_APP_ENV_DNS_SUFFIX", raising=False)
+    monkeypatch.delenv("HANDOFF_TRUSTED_HOSTS", raising=False)
+
+    with pytest.raises(handoff.HandoffError):
+        await handoff.validate_public_https_url(f"https://files-dorg-david.{SUFFISSO}/files/tok")

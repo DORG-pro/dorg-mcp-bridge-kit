@@ -174,25 +174,45 @@ async def _resolve_host(host: str) -> list[str]:
     return [info[4][0] for info in infos]
 
 
-def trusted_handoff_hosts() -> frozenset[str]:
-    """Hosts the operator vouches for, exempt from the public-address rule.
+def _same_environment_suffix() -> str:
+    """The DNS suffix shared by the competencies deployed next to this one.
 
-    Two competencies deployed side by side resolve each other's public FQDN to
-    an address inside their own network, so the anti-SSRF rule below rejects the
-    very handoff it exists to protect. Naming those peers explicitly keeps the
-    rule intact for every other URL: the exemption covers the hosts an operator
-    listed, not "anything that happens to be internal".
+    Container Apps gives every environment its own suffix with a random token
+    in it (`politeflower-70dfddde.francecentral.azurecontainerapps.io`), and
+    injects it into each container. A hostname under that suffix therefore
+    belongs to this dorg's own environment: it cannot be forged from outside.
+    """
+    return os.getenv("CONTAINER_APP_ENV_DNS_SUFFIX", "").strip().lower()
+
+
+def trusted_handoff_hosts() -> frozenset[str]:
+    """Extra hosts the operator vouches for, on top of the sibling services.
+
+    Escape hatch for a peer that lives in *another* environment. The normal
+    case — the competencies of the same dorg — is recognised automatically by
+    `_same_environment_suffix`, so nobody has to paste an internal hostname
+    into the Console for it.
     """
     raw = os.getenv("HANDOFF_TRUSTED_HOSTS", "")
     return frozenset(host.strip().lower() for host in raw.split(",") if host.strip())
 
 
+def _is_trusted_peer(host: str) -> bool:
+    """True for a competency of this same dorg, or an explicitly listed host."""
+    host = host.lower()
+    suffix = _same_environment_suffix()
+    if suffix and host.endswith("." + suffix):
+        return True
+    return host in trusted_handoff_hosts()
+
+
 async def validate_public_https_url(url: str) -> httpx.URL:
     """Accept only https URLs whose host resolves exclusively to public addresses.
 
-    A host listed in HANDOFF_TRUSTED_HOSTS skips the address rule — never the
-    https requirement. This runs again on every redirect, so a trusted host
-    cannot bounce the fetch onto an untrusted one.
+    A competency of this same dorg is exempt from the address rule — never from
+    the https requirement — because side-by-side services resolve each other's
+    public FQDN to an internal address. This runs again on every redirect, so a
+    trusted host cannot bounce the fetch onto an untrusted one.
     """
     parsed = urlsplit(url)
     if parsed.scheme.lower() != "https":
@@ -200,7 +220,7 @@ async def validate_public_https_url(url: str) -> httpx.URL:
     host = parsed.hostname
     if not host:
         raise HandoffError("The URL has no host.")
-    if host.lower() in trusted_handoff_hosts():
+    if _is_trusted_peer(host):
         return httpx.URL(url)
     try:
         addresses = [str(ipaddress.ip_address(host))]
@@ -213,8 +233,8 @@ async def validate_public_https_url(url: str) -> httpx.URL:
         if not ipaddress.ip_address(address).is_global:
             raise HandoffError(
                 f"Host '{host}' resolves to a non-public address; refusing to fetch. "
-                "If this is another competency deployed alongside this one, add its host "
-                "to HANDOFF_TRUSTED_HOSTS."
+                "Competencies of this same dorg are recognised automatically; a peer in "
+                "another environment has to be listed in HANDOFF_TRUSTED_HOSTS."
             )
     return httpx.URL(url)
 

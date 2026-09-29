@@ -318,7 +318,7 @@ competenze passare i link, mai ricreare il contenuto né incollarlo in chat.
 | `HANDOFF_TTL_SECONDS` | Scadenza dei link di handoff (default 600) |
 | `HANDOFF_MAX_FETCH_MB` | Cap dimensione per `fetch_url` (default 200) |
 | `HANDOFF_FETCH_TIMEOUT_SECONDS` | Timeout `fetch_url` (default 120) |
-| `HANDOFF_TRUSTED_HOSTS` | Host separati da virgola esentati dal controllo "solo indirizzi pubblici" di `fetch_url`. Serve quando la competenza sorgente è schierata nello stesso ambiente Container Apps: il FQDN pubblico dell'altra competenza risolve su un indirizzo interno e la protezione anti-SSRF lo rifiuterebbe. L'esenzione vale solo per gli host elencati e mai per lo schema: `http` resta rifiutato, e un host fidato non può redirigere il fetch su uno non fidato. |
+| `HANDOFF_TRUSTED_HOSTS` | Host aggiuntivi esentati dal controllo "solo indirizzi pubblici" di `fetch_url`. **Di norma non serve:** le competenze dello stesso dorg vengono riconosciute da sole tramite il suffisso DNS dell'ambiente Container Apps. Da valorizzare solo per una competenza che vive in un ambiente diverso. L'esenzione riguarda solo l'indirizzo: `https` resta obbligatorio e un host fidato non puo' redirigere il fetch su uno non fidato. |
 
 ## Validazione
 
