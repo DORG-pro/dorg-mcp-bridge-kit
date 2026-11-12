@@ -105,7 +105,7 @@ Identità e presentazione della competenza. Campi comuni:
 | `vcpu` / `ram` | no | Risorse container (default `0.5` / `1.0`) |
 | `health_path` / `mcp_path` | no | Path bridge (default `/health`, `/mcp`) |
 | `docker_image` | no | Riferimento immagine in manifest |
-| `supported_dorg_versions` | no | Compatibilità runtime (default `["3.*"]`) |
+| `supported_dorg_versions` | no | Compatibilità runtime (default `["3.*", "4.*"]`: tutta la linea 3 e tutta la linea 4; una restrizione va motivata nel README del bridge) |
 | `intended_usage` | no | Casi d'uso per University |
 | `documentation` | no | Path docs (default `/docs/<id>`) |
 | `env` | no | Variabili che l'operatore configura in Console → `competency_env` nel manifest |
