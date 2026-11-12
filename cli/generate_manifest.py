@@ -223,7 +223,7 @@ def build_manifest(project: dict[str, Any], upstream_tools: list[dict[str, Any]]
         "competency_ram": competency.get("ram", 1.0),
         "competency_health_path": competency.get("health_path", "/health"),
         "competency_mcp_path": competency.get("mcp_path", "/mcp"),
-        "supported_dorg_versions": competency.get("supported_dorg_versions", ["3.*"]),
+        "supported_dorg_versions": competency.get("supported_dorg_versions", ["3.*", "4.*"]),
         "intended_usage": competency.get("intended_usage", []),
         "tools": tools,
     }

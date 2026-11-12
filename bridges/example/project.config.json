@@ -9,7 +9,7 @@
     "health_path": "/health",
     "mcp_path": "/mcp",
     "docker_image": "yourregistry.azurecr.io/dorg-mcp-bridge:1.0.0",
-    "supported_dorg_versions": ["3.*"],
+    "supported_dorg_versions": ["3.*", "4.*"],
     "intended_usage": [
       "Use when colleagues need to interact with the wrapped remote service through natural language.",
       "Do not use for operations outside the exposed tools."
